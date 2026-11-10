@@ -1,9 +1,8 @@
 # Test Postgres and Redis
 
 Throwaway services on the homelab cluster for tests that need a real Postgres
-(IMM-2039) or Redis (IMM-2040). Namespace `[[ test_namespace ]]`, reachable from the
-LAN and from in-cluster CI through NodePorts on any node, for example
-`192.168.0.10`.
+or Redis. Namespace `[[ test_namespace ]]`, reachable from the LAN and from
+in-cluster CI through NodePorts on any node, for example `192.168.0.10`.
 
 | Service | Image | NodePort |
 |---|---|---|

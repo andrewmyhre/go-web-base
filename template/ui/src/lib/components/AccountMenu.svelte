@@ -29,7 +29,7 @@
 		accountOpen = true;
 	}
 
-	// IMM-2001: closing the account modal returns focus to the avatar.
+	// Closing the account modal returns focus to the avatar.
 	function closeAccount() {
 		accountOpen = false;
 		trigger?.focus();

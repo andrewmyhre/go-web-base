@@ -83,7 +83,7 @@ describe('AccountMenu', () => {
 		expect(dialog.textContent).toContain('No roles.');
 	});
 
-	it('Close closes the modal and returns focus to the avatar (IMM-2001)', async () => {
+	it('Close closes the modal and returns focus to the avatar', async () => {
 		const { avatar } = setup();
 		const dialog = (await openAccount(avatar)) as HTMLDialogElement;
 		expect(document.activeElement).not.toBe(avatar);

@@ -53,8 +53,8 @@ uvx copier@9.19.1 update
 | `dev_namespace` | `<slug>-dev` | dev environment |
 | `test_namespace` | `<slug>-test` | test Postgres and Redis |
 | `registry` | `192.168.0.10:30500` | image names |
-| `test_postgres_nodeport` | `30543` | test Postgres; unique per cluster |
-| `test_redis_nodeport` | `30637` | test Redis; unique per cluster |
+| `test_postgres_nodeport` | none | test Postgres; must be free on the cluster |
+| `test_redis_nodeport` | none | test Redis; free, and not the Postgres port |
 | `admin_sub` | empty | the global Admin's Google sub |
 
 Two values are derived and never asked: the lower case of `env_prefix` names
@@ -62,8 +62,13 @@ the cookies (`<ident>_session`, `<ident>_oauth_state`), the Postgres user and
 database, the Redis key prefixes and the root Go package; the first label of
 `dev_host` is the Cloudflare subdomain.
 
-The defaults for `test_postgres_nodeport` and `test_redis_nodeport` are
-huddle-go's ports. Pick free ones for any project that shares the cluster.
+The two NodePorts have no default, because a default would collide for the
+second project that kept it. Find free ones with `kubectl get svc -A`. The
+validator rejects ports outside 30000-32767, the same port twice, and the
+ports in `taken_nodeports` in `copier.yml`: a snapshot of services on the
+cluster that were not generated from this template. Never add a generated
+project's ports to that list, because its `copier update` would then fail
+validation.
 
 ## Per-project setup checklist
 
@@ -147,7 +152,8 @@ To run the same checks locally:
 
 ```sh
 uvx copier@9.19.1 copy --vcs-ref HEAD --defaults --trust . /tmp/sample \
-  -d project_slug=sample-app -d github_repo=example/sample-app
+  -d project_slug=sample-app -d github_repo=example/sample-app \
+  -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
 cd /tmp/sample
 test -z "$(gofmt -l .)" && go vet ./... && SAMPLE_APP_SKIP_SERVICE_TESTS=1 go test ./...
 cd ui && pnpm install --frozen-lockfile && pnpm run check:client && pnpm test && pnpm check && pnpm build
@@ -158,12 +164,15 @@ cd ui && pnpm install --frozen-lockfile && pnpm run check:client && pnpm test &&
 Rendering with huddle answers reproduces `huddle-go` `v0.1.0` except for
 deliberate changes: the sealed secrets and `docs/plan-high-level.md` are
 dropped, the Roles section moved to `docs/roles.md`, the skip switch was added,
-and the setup docs gained the sealing commands.
+the setup docs gained the sealing commands, and the old Linear issue
+references were removed. huddle-go's NodePorts are on the taken list, so the
+control uses others, and the port lines differ too.
 
 ```sh
 git -C ~/projects/huddle-go archive v0.1.0 | tar -x -C /tmp/huddle-v0.1.0
 uvx copier@9.19.1 copy --vcs-ref HEAD --defaults --trust . /tmp/huddle-render \
   -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go \
-  -d env_prefix=HUDDLE -d dev_host=huddle-dev.immutablesoftware.dev
+  -d env_prefix=HUDDLE -d dev_host=huddle-dev.immutablesoftware.dev \
+  -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
 diff -r /tmp/huddle-v0.1.0 /tmp/huddle-render
 ```

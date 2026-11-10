@@ -151,7 +151,7 @@ steps:
         kubectl -n "$${NAMESPACE}" apply -f "$${OUT}/api.yaml" -f "$${OUT}/ui.yaml" -f "$${OUT}/ingress.yaml"
         kubectl -n "$${NAMESPACE}" rollout status deployment/[[ project_slug ]]-api --timeout=180s
         kubectl -n "$${NAMESPACE}" rollout status deployment/[[ project_slug ]]-ui --timeout=180s
-        # IMM-2038: the rollout only counts as a success once the new images
+        # The rollout only counts as a success once the new images
         # answer with 200; anything else exits the step non-zero.
         for URL in "http://[[ project_slug ]]-api.$${NAMESPACE}.svc.cluster.local/health" "http://[[ project_slug ]]-ui.$${NAMESPACE}.svc.cluster.local/"; do
           CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --retry 5 --retry-delay 2 --retry-all-errors "$${URL}" || true)
