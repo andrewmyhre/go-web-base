@@ -27,9 +27,11 @@ steps:
         git config --global --add safe.directory '*'
         COPIER="uvx copier@9.19.1"
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample \
-          -d project_slug=sample-app -d github_repo=example/sample-app
+          -d project_slug=sample-app -d github_repo=example/sample-app \
+          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . /tmp/control \
-          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE
+          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE \
+          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
         if grep -rIil huddle sample; then
           echo "sweep: huddle survives in the sample" >&2
           exit 1
