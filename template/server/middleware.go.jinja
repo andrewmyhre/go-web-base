@@ -1,0 +1,122 @@
+package server
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
+
+	"[[ go_module ]]/logging"
+)
+
+// RequestIDHeader carries the request id back to the caller, so an operator
+// can pair the request's api line with its rbac lines in Loki.
+const RequestIDHeader = "X-Request-Id"
+
+type requestIDContextKey struct{}
+
+// RequestIDFromContext returns the id accessLog generated for the in-flight
+// request, or "" outside one. RBAC checks use it so their lines carry the
+// same id as the request's api line.
+func RequestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDContextKey{}).(string)
+	return id
+}
+
+// newRequestID is a random id, unique per request without any shared
+// counter.
+func newRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// accessLog logs one api-scope line per request, through the logging
+// helpers, and returns the generated request id in a response header.
+func accessLog(log *zap.Logger) func(http.Handler) http.Handler {
+	access := logging.New(log)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestID := newRequestID()
+			w.Header().Set(RequestIDHeader, requestID)
+
+			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			info := &requestInfo{}
+			r = r.WithContext(context.WithValue(r.Context(), requestInfoKey, info))
+			r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID))
+
+			next.ServeHTTP(ww, r)
+
+			status := ww.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+			route := ""
+			if rc := chi.RouteContext(r.Context()); rc != nil {
+				route = rc.RoutePattern()
+			}
+			permission := ""
+			if info.set {
+				permission = info.permission.String()
+			}
+			access.Access(logging.APIRequest{
+				RequestID:  requestID,
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				Route:      route,
+				Permission: permission,
+				Status:     status,
+				UserSub:    info.userSub,
+				ClientIP:   peerIP(r),
+				Duration:   time.Since(start),
+			})
+		})
+	}
+}
+
+// recovery turns a handler panic into a 500 response and a zap error entry.
+// http.ErrAbortHandler is re-panicked so net/http can abort the response as
+// that sentinel intends.
+func recovery(log *zap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				p := recover()
+				if p == nil {
+					return
+				}
+				if err, ok := p.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(p)
+				}
+				log.Error("handler panicked",
+					zap.Any("panic", p),
+					zap.String("method", r.Method),
+					zap.String("path", r.URL.Path),
+					zap.Stack("stack"),
+				)
+				w.WriteHeader(http.StatusInternalServerError)
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// peerIP is the address of the connection's peer. Proxy headers such as
+// X-Forwarded-For are not trusted.
+func peerIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}

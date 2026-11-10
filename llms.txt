@@ -1,0 +1,10 @@
+# go-web-base
+
+> A Copier template, generated from huddle-go v0.1.0, for Go + SvelteKit web projects with Google sign-in and Casbin RBAC. Tracked in Linear (team IMM, project "go-web-base").
+
+## Docs
+
+- [README.md](README.md): What a generated project has, how to copy and update one (Copier 9.19.1 via uvx), the questions, the per-project setup checklist, and how the template and its CI work.
+- [copier.yml](copier.yml): The questions, their defaults and validators, the derived values, and the `[[ ]]` Jinja delimiters.
+- [.woodpecker.yml](.woodpecker.yml): Template CI - renders a sample project, sweeps it for `huddle`, and runs its Go and UI checks with the service tests skipped.
+- [template/llms.txt.jinja](template/llms.txt.jinja): The doc index each generated project starts with.

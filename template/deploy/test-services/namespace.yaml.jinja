@@ -1,0 +1,9 @@
+# Throwaway Postgres and Redis for [[ project_slug ]] tests (IMM-2039, IMM-2040).
+# No persistent volumes: a pod restart wipes all data, so tests must create
+# what they need and never rely on leftovers.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: [[ test_namespace ]]
+  labels:
+    app.kubernetes.io/part-of: [[ project_slug ]]

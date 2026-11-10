@@ -1,0 +1,398 @@
+// Package db is the durable storage for the [[ project_slug ]] API.
+//
+// It owns the PostgreSQL connection and all data access, the generated
+// queries, and the domain services that sit on top of them. It does not
+// know about HTTP: the server package adapts the results it returns to the
+// wire.
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/model"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Global is the special Casbin domain. A role binding made in this domain
+// applies in every project; a binding made in a project's own domain applies
+// only in that project. Role definitions also live here: a binding in any
+// domain draws the permissions of the role it is bound to, whatever that
+// domain is, so a binding in the global domain is a wildcard the authorizer
+// checks in addition to the request's project.
+//
+// A project must never be named "global": a binding in that project's
+// domain would be a global binding. Project IDs are generated, not chosen.
+const Global = "global"
+
+// AdminRole is the role the configured admin user is bound to in the global
+// domain. It is the most privileged role: it carries, through inheritance,
+// every permission the other roles grant.
+const AdminRole = "Admin"
+
+// Errors returned for subjects that cannot be authorized or bootstrapped.
+var (
+	// ErrSubjectIsRole is returned when a subject is the name of a role.
+	// Casbin treats every name as linked to itself, so a request whose
+	// subject is "Admin" would otherwise draw the Admin role's permissions
+	// with no binding at all.
+	ErrSubjectIsRole = errors.New("subject is a role name")
+	// ErrEmptySubject is returned when a subject is empty.
+	ErrEmptySubject = errors.New("subject is empty")
+	// ErrAdminSubIsEmail is returned when the configured admin is an email
+	// address. The bootstrap binds the OIDC subject, never an email.
+	ErrAdminSubIsEmail = errors.New("admin subject looks like an email address, want the OIDC sub")
+)
+
+// rbacModelString is [[ project_slug ]]'s RBAC-with-domains model. The domain (r.dom) scopes
+// a role binding to one project or to the global domain. It is deliberately
+// not required to equal the domain of the role definition (p.dom), which is
+// always Global: the binding's domain is where the user draws their
+// permissions from, so scoping is enforced by the binding, and the authorizer
+// also checks the global domain so a wildcard binding applies everywhere.
+// Because p.dom is not matched, NewEnforcer removes every p rule that is not
+// a role definition from the code below, so no stray rule can apply.
+const rbacModelString = `
+[request_definition]
+r = sub, dom, obj, act
+
+[policy_definition]
+p = sub, obj, act, dom
+
+[role_definition]
+g = _, _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub, r.dom) && r.obj == p.obj && r.act == p.act
+`
+
+// permission is one (resource, verb) a role grants. The strings are the
+// server package's Resource and Verb values (server.Permission); a test in
+// this package validates every one of them against server.Permission.
+type permission struct {
+	resource string
+	action   string
+}
+
+// role is one role in docs/roles.md: the roles it inherits from and the
+// permissions it grants on its own.
+type role struct {
+	name        string
+	inherits    []string
+	permissions []permission
+}
+
+// roles is the role graph from docs/roles.md,
+// transcribed one bullet per permission. A test parses that section and
+// fails if the two disagree, so edit docs/roles.md and this table together.
+//
+// Inheritance is a graph, not a ladder: Project Manager inherits Contributor
+// and Secrets Manager, Manager inherits Project Manager, and Admin inherits
+// Manager, Secrets Manager and Workflow Manager. A role's effective
+// permissions are the union of its own and every role it inherits.
+var roles = []role{
+	{
+		name: "Contributor",
+		permissions: []permission{
+			{"Projects", "Read"},
+			{"AgentConversations", "Read"}, {"AgentConversations", "Create"},
+			{"AgentMessages", "Read"}, {"AgentMessages", "Create"}, {"AgentMessages", "Patch"},
+			{"PermissionPrompts", "Answer"},
+			{"Requests", "Read"}, {"Requests", "Patch"},
+			{"ProjectFiles", "Read"}, {"ProjectFiles", "Create"}, {"ProjectFiles", "Patch"}, {"ProjectFiles", "Delete"},
+			{"Workflows", "Read"}, {"Workflows", "Run"},
+			{"WorkflowSteps", "Read"},
+		},
+	},
+	{
+		name: "Secrets Manager",
+		permissions: []permission{
+			{"Secrets", "Create"}, {"Secrets", "Patch"}, {"Secrets", "Delete"},
+		},
+	},
+	{
+		name:     "Project Manager",
+		inherits: []string{"Contributor", "Secrets Manager"},
+		permissions: []permission{
+			{"UserInvitation", "Create"}, {"UserInvitation", "Patch"}, {"UserInvitation", "Delete"},
+		},
+	},
+	{
+		name: "Workflow Manager",
+		permissions: []permission{
+			{"Workflows", "Read"}, {"Workflows", "Create"}, {"Workflows", "Patch"}, {"Workflows", "Delete"},
+			{"WorkflowSteps", "Read"}, {"WorkflowSteps", "Create"}, {"WorkflowSteps", "Patch"}, {"WorkflowSteps", "Delete"},
+			{"WorkflowLink", "Create"}, {"WorkflowLink", "Delete"},
+		},
+	},
+	{
+		name:     "Manager",
+		inherits: []string{"Project Manager"},
+		permissions: []permission{
+			{"Projects", "Create"}, {"Projects", "Patch"}, {"Projects", "Delete"},
+		},
+	},
+	{
+		name:     AdminRole,
+		inherits: []string{"Manager", "Secrets Manager", "Workflow Manager"},
+		permissions: []permission{
+			{"Users", "Read"}, {"Users", "Create"}, {"Users", "Patch"}, {"Users", "Delete"},
+			{"AccessReviews", "Create"},
+			{"Providers", "Read"}, {"Providers", "Create"}, {"Providers", "Patch"}, {"Providers", "Delete"},
+		},
+	},
+}
+
+func roleByName(name string) *role {
+	for i := range roles {
+		if roles[i].name == name {
+			return &roles[i]
+		}
+	}
+	return nil
+}
+
+// isRoleName reports whether name is one of the roles above.
+func isRoleName(name string) bool { return roleByName(name) != nil }
+
+// flatten returns name's full permission set: its own permissions plus the
+// permissions of every role it (transitively) inherits, de-duplicated, own
+// first then inherited. Collapsing the role graph into per-role permissions
+// (instead of relying on Casbin to walk role-to-role links) is what lets a
+// binding in any project draw the full set: Casbin's domain-scoped role
+// inheritance would only reach links stored in the same domain, but a role's
+// permissions are a fixed set regardless of where its members sit.
+func flatten(name string) []permission {
+	visited := map[string]bool{}
+	seen := map[permission]bool{}
+	var out []permission
+	var visit func(string)
+	visit = func(r string) {
+		if visited[r] {
+			return
+		}
+		visited[r] = true
+		role := roleByName(r)
+		if role == nil {
+			return
+		}
+		for _, p := range role.permissions {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+		for _, parent := range role.inherits {
+			visit(parent)
+		}
+	}
+	visit(name)
+	return out
+}
+
+// RolePermissions returns every role's flattened permissions as
+// "Resource: Verb" strings, sorted, keyed by role name. It is the role graph
+// as the enforcer sees it, for checks outside this package.
+func RolePermissions() map[string][]string {
+	out := make(map[string][]string, len(roles))
+	for _, r := range roles {
+		var perms []string
+		for _, p := range flatten(r.name) {
+			perms = append(perms, p.resource+": "+p.action)
+		}
+		sort.Strings(perms)
+		out[r.name] = perms
+	}
+	return out
+}
+
+// NewEnforcer builds the Casbin enforcer over the Casbin adapter for pool:
+// the RBAC-with-domains model, the role definitions in docs/roles.md, and, when
+// adminSub is not empty, the binding of adminSub to the Admin role in the
+// global domain.
+//
+// The role definitions in the database are reconciled to the code: missing
+// ones are added and any other p rule is removed, so a permission dropped
+// from a role stops applying on the next start. Running it again over the
+// same pool (a restart) writes nothing. The admin binding is only ever
+// added: changing adminSub does not revoke the previous admin.
+func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string) (*casbin.Enforcer, error) {
+	if adminSub != "" {
+		if err := checkAdminSub(adminSub); err != nil {
+			return nil, fmt.Errorf("bootstrap admin %q: %w", adminSub, err)
+		}
+	}
+	m, err := model.NewModelFromString(rbacModelString)
+	if err != nil {
+		return nil, fmt.Errorf("build rbac model: %w", err)
+	}
+	e, err := casbin.NewEnforcer(m, NewCasbinAdapter(pool))
+	if err != nil {
+		return nil, fmt.Errorf("new casbin enforcer: %w", err)
+	}
+	// casbin.NewEnforcer has already loaded the stored policy, so the
+	// reconcile below writes only the difference: a restart is a no-op.
+	if err := loadRoleDefinitions(e); err != nil {
+		return nil, fmt.Errorf("load role definitions: %w", err)
+	}
+	if adminSub != "" {
+		if err := bindAdmin(e, adminSub); err != nil {
+			return nil, fmt.Errorf("bootstrap admin %q: %w", adminSub, err)
+		}
+	}
+	return e, nil
+}
+
+// checkAdminSub refuses an admin subject that cannot be an OIDC sub.
+func checkAdminSub(sub string) error {
+	if isRoleName(sub) {
+		return ErrSubjectIsRole
+	}
+	if strings.Contains(sub, "@") {
+		return ErrAdminSubIsEmail
+	}
+	return nil
+}
+
+// wantedPolicies is every role's flattened permissions as p rules, all in
+// the global domain.
+func wantedPolicies() [][]string {
+	var out [][]string
+	for _, r := range roles {
+		for _, p := range flatten(r.name) {
+			out = append(out, []string{r.name, p.resource, p.action, Global})
+		}
+	}
+	return out
+}
+
+func ruleKey(rule []string) string { return strings.Join(rule, "\x00") }
+
+// loadRoleDefinitions reconciles e's p rules to wantedPolicies: it removes
+// every p rule not in that set and adds every one missing from e.
+func loadRoleDefinitions(e *casbin.Enforcer) error {
+	wanted := wantedPolicies()
+	want := make(map[string]bool, len(wanted))
+	for _, rule := range wanted {
+		want[ruleKey(rule)] = true
+	}
+	have, err := e.GetPolicy()
+	if err != nil {
+		return fmt.Errorf("read policy: %w", err)
+	}
+	for _, rule := range have {
+		if want[ruleKey(rule)] {
+			continue
+		}
+		if _, err := e.RemovePolicy(rule); err != nil {
+			return fmt.Errorf("remove stale %v: %w", rule, err)
+		}
+	}
+	for _, rule := range wanted {
+		if _, err := e.AddPolicy(rule); err != nil {
+			return fmt.Errorf("add %v: %w", rule, err)
+		}
+	}
+	return nil
+}
+
+// bindAdmin binds adminSub to the Admin role in the global domain.
+func bindAdmin(e *casbin.Enforcer, adminSub string) error {
+	if _, err := e.AddGroupingPolicy(adminSub, AdminRole, Global); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Authorize reports whether sub may act on object with action in project. A
+// binding in project's own domain applies there; a binding in the global
+// domain applies in every project, so the global domain is checked in
+// addition. It denies, with an error, an empty subject or one that is a role
+// name. Every error is a denial.
+func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, error) {
+	if sub == "" {
+		return false, ErrEmptySubject
+	}
+	if isRoleName(sub) {
+		return false, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	}
+	ok, err := e.Enforce(sub, project, object, action)
+	if err != nil {
+		return false, fmt.Errorf("enforce %s on %s/%s in %s: %w", sub, object, action, project, err)
+	}
+	if ok {
+		return true, nil
+	}
+	ok, err = e.Enforce(sub, Global, object, action)
+	if err != nil {
+		return false, fmt.Errorf("enforce %s on %s/%s in global: %w", sub, object, action, err)
+	}
+	return ok, nil
+}
+
+// HasRoleBinding reports whether sub is bound to any role in any domain:
+// the global domain or a project's. It is the sign-in gate: a subject with
+// no binding at all is refused before a session is created. It reads the
+// enforcer's loaded policy, the same policy Authorize decides from. It
+// refuses, with an error, an empty subject or one that is a role name, so
+// a role can never sign in as itself. Every error is a refusal.
+func HasRoleBinding(e *casbin.Enforcer, sub string) (bool, error) {
+	if sub == "" {
+		return false, ErrEmptySubject
+	}
+	if isRoleName(sub) {
+		return false, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	}
+	rules, err := e.GetFilteredGroupingPolicy(0, sub)
+	if err != nil {
+		return false, fmt.Errorf("read bindings of %s: %w", sub, err)
+	}
+	return len(rules) > 0, nil
+}
+
+// Binding is one role a subject is bound to, and the domain it is bound in:
+// Global or a project's ID.
+type Binding struct {
+	Role   string
+	Domain string
+}
+
+// RoleBindingsOf returns every role sub is bound to, in every domain,
+// sorted by domain and then role. It reads the enforcer's loaded policy,
+// the same policy Authorize decides from. A subject with no binding gets an
+// empty, non-nil slice. Like HasRoleBinding it refuses, with an error, an
+// empty subject or one that is a role name.
+func RoleBindingsOf(e *casbin.Enforcer, sub string) ([]Binding, error) {
+	if sub == "" {
+		return nil, ErrEmptySubject
+	}
+	if isRoleName(sub) {
+		return nil, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	}
+	rules, err := e.GetFilteredGroupingPolicy(0, sub)
+	if err != nil {
+		return nil, fmt.Errorf("read bindings of %s: %w", sub, err)
+	}
+	out := make([]Binding, 0, len(rules))
+	for _, r := range rules {
+		// A g rule is (subject, role, domain).
+		if len(r) < 3 {
+			return nil, fmt.Errorf("binding of %s has %d fields, want 3: %v", sub, len(r), r)
+		}
+		out = append(out, Binding{Role: r[1], Domain: r[2]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Domain != out[j].Domain {
+			return out[i].Domain < out[j].Domain
+		}
+		return out[i].Role < out[j].Role
+	})
+	return out, nil
+}

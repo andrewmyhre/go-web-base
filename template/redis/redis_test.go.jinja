@@ -1,0 +1,166 @@
+package redis
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+)
+
+// testConfig returns the configuration for the throwaway test Redis in
+// deploy/test-services, failing (not skipping) when the address is unset: a
+// skipped check proves nothing. [[ env_prefix ]]_SKIP_SERVICE_TESTS=1 is the one
+// deliberate way to skip, for a checkout with no test services (the
+// go-web-base template CI uses it).
+func testConfig(t *testing.T) Config {
+	t.Helper()
+	if os.Getenv("[[ env_prefix ]]_SKIP_SERVICE_TESTS") == "1" {
+		t.Skip("[[ env_prefix ]]_SKIP_SERVICE_TESTS=1: skipping a test that needs the test Redis")
+	}
+	addr := os.Getenv("[[ env_prefix ]]_TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("[[ env_prefix ]]_TEST_REDIS_ADDR is not set; see deploy/test-services/README.md")
+	}
+	return Config{
+		Addr:     addr,
+		Password: os.Getenv("[[ env_prefix ]]_TEST_REDIS_PASSWORD"),
+	}
+}
+
+// newTestStore connects to the test Redis and returns a Store that writes
+// under a unique key prefix, so runs share the throwaway server (which has no
+// persistence) without colliding.
+func newTestStore(t *testing.T) *Store {
+	t.Helper()
+	client, err := NewClient(context.Background(), testConfig(t))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	id, err := newID()
+	if err != nil {
+		t.Fatalf("newID: %v", err)
+	}
+	return NewStore(client, "[[ project_slug ]]:test:"+id+":")
+}
+
+func TestPingIsAHealthCheck(t *testing.T) {
+	client, err := NewClient(context.Background(), testConfig(t))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	if err := Ping(context.Background(), client); err != nil {
+		t.Fatalf("Ping on a live server: %v", err)
+	}
+}
+
+func TestSessionIsCreatedReadBackAndDeleted(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.Create(ctx, time.Minute, map[string]string{"user": "u1", "org": "o1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got["user"] != "u1" || got["org"] != "o1" {
+		t.Errorf("Get = %v, want user=u1 org=o1", got)
+	}
+
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after Delete = %v, want ErrNotFound", err)
+	}
+	// Deleting again is a no-op, so sign-out of an already-gone session is
+	// safe.
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("second Delete: %v", err)
+	}
+}
+
+func TestGetUnknownSessionIsNotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Get(context.Background(), "no-such-session"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get unknown = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSessionExpiresAfterItsTTL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const ttl = time.Second
+
+	id, err := s.Create(ctx, ttl, map[string]string{"user": "u1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Get(ctx, id); err != nil {
+		t.Fatalf("Get before expiry: %v", err)
+	}
+
+	// Poll past the TTL rather than sleeping a fixed amount, so the test is
+	// stable on a slow server.
+	deadline := time.Now().Add(5 * ttl)
+	for {
+		if _, err := s.Get(ctx, id); errors.Is(err, ErrNotFound) {
+			return // the session expired
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session with ttl %v had not expired by %v", ttl, deadline.Sub(time.Now()))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestNewClientFailsWhenUnreachable pins that NewClient is a working client:
+// it refuses to hand back one that cannot reach its server.
+func TestNewClientFailsWhenUnreachable(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{Addr: "127.0.0.1:1"})
+	if err == nil {
+		t.Fatal("NewClient to an unreachable server: expected an error, got nil")
+	}
+}
+
+func TestCreateRefusesNonPositiveTTL(t *testing.T) {
+	s := newTestStore(t)
+	for _, ttl := range []time.Duration{0, -time.Second} {
+		if id, err := s.Create(context.Background(), ttl, nil); err == nil {
+			t.Errorf("Create with ttl %v = %q, nil; want an error (a zero TTL never expires in Redis)", ttl, id)
+		}
+	}
+}
+
+// TestTakeIsSingleUse proves Take returns a record once and then reports it
+// gone, which is what makes an OAuth sign-in attempt single-use.
+func TestTakeIsSingleUse(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.Create(ctx, time.Minute, map[string]string{"verifier": "v1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := s.Take(ctx, id)
+	if err != nil {
+		t.Fatalf("first Take: %v", err)
+	}
+	if got["verifier"] != "v1" {
+		t.Fatalf("first Take = %v, want verifier v1", got)
+	}
+	if _, err := s.Take(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second Take error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Get(ctx, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after Take error = %v, want ErrNotFound", err)
+	}
+}

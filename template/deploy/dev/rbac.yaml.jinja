@@ -1,0 +1,81 @@
+# The identity the deploy-dev step in .woodpecker.yml runs as. Woodpecker
+# v3.14.1's Kubernetes backend puts every step pod in the `woodpecker`
+# namespace, and a step may name a ServiceAccount there with
+# backend_options.kubernetes.serviceAccountName (pipeline/backend/kubernetes/
+# pod.go sets it unconditionally; no agent flag gates it). So there is no
+# kubeconfig secret: the step's pod gets this SA's token mounted.
+#
+# The grant is the smallest that `kubectl apply` of the three app manifests
+# (api.yaml, ui.yaml, ingress.yaml) and `kubectl rollout status` need: read
+# and create Deployments, Services and Ingresses in [[ dev_namespace ]], patch only
+# the ones named below, and read ReplicaSets and Pods. Nothing on Secrets,
+# PersistentVolumeClaims, Roles, RoleBindings or Namespaces.
+#
+# `create` cannot be limited by resourceNames (the name is not known when
+# the request is authorized), so this SA can create any Deployment, Service
+# or Ingress in [[ dev_namespace ]]. apply only creates when the object is
+# missing; after the one-time setup they all exist and every apply is a
+# patch. An Ingress it creates could claim paths on any hostname that
+# ingress-nginx serves, which is the widest reach here (README.md).
+#
+# CAVEAT: the name is not a secret, and Woodpecker does not restrict which
+# repo or event may name it, so any pipeline on this server (a pull request
+# included) could run a step as this SA. See README.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: [[ project_slug ]]-deployer
+  namespace: woodpecker
+  labels: { app.kubernetes.io/part-of: [[ project_slug ]] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: [[ project_slug ]]-deployer
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/part-of: [[ project_slug ]] }
+rules:
+  # kubectl apply reads each object, creates it if missing, else patches it.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: ["[[ project_slug ]]-api", "[[ project_slug ]]-ui"]
+    verbs: [patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, create]
+  - apiGroups: [""]
+    resources: [services]
+    resourceNames: ["[[ project_slug ]]-api", "[[ project_slug ]]-ui"]
+    verbs: [patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    resourceNames: ["[[ project_slug ]]"]
+    verbs: [patch]
+  # kubectl rollout status follows the ReplicaSets and Pods.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: [[ project_slug ]]-deployer
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/part-of: [[ project_slug ]] }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: [[ project_slug ]]-deployer
+subjects:
+  - kind: ServiceAccount
+    name: [[ project_slug ]]-deployer
+    namespace: woodpecker

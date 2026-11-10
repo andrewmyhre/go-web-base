@@ -1,0 +1,119 @@
+// Package grafana holds the [[ project_slug ]] logs dashboard. This test pins its
+// filter variables to the logging contract in docs/logging.md.
+package grafana
+
+import (
+	"encoding/json"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	"[[ go_module ]]/logging"
+)
+
+type variable struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Query      any    `json:"query"`
+	Multi      bool   `json:"multi"`
+	IncludeAll bool   `json:"includeAll"`
+	AllValue   string `json:"allValue"`
+}
+
+type dashboard struct {
+	UID        string `json:"uid"`
+	Templating struct {
+		List []variable `json:"list"`
+	} `json:"templating"`
+	Panels []struct {
+		Title   string `json:"title"`
+		Targets []struct {
+			Expr string `json:"expr"`
+		} `json:"targets"`
+	} `json:"panels"`
+}
+
+// filters are the six contract fields the dashboard filters on.
+var filters = []string{"scope", "provider", "agent_id", "session_id", "kind", "request_id"}
+
+func load(t *testing.T) dashboard {
+	t.Helper()
+	data, err := os.ReadFile("[[ project_slug ]]-logs.json")
+	if err != nil {
+		t.Fatalf("read dashboard: %v", err)
+	}
+	var d dashboard
+	if err := json.Unmarshal(data, &d); err != nil {
+		t.Fatalf("parse dashboard: %v", err)
+	}
+	return d
+}
+
+// TestDashboardVariables pins the six filter dropdowns: each is a
+// multi-select with an All that matches anything, and scope and kind offer
+// exactly the contract's values.
+func TestDashboardVariables(t *testing.T) {
+	d := load(t)
+	if d.UID != "[[ project_slug ]]-logs" {
+		t.Errorf("uid = %q, want [[ project_slug ]]-logs", d.UID)
+	}
+	vars := map[string]variable{}
+	for _, v := range d.Templating.List {
+		vars[v.Name] = v
+	}
+	for _, name := range filters {
+		v, ok := vars[name]
+		if !ok {
+			t.Errorf("variable %q is missing", name)
+			continue
+		}
+		if v.Type != "custom" || !v.Multi || !v.IncludeAll || v.AllValue != ".*" {
+			t.Errorf("variable %q = %+v, want a custom multi-select with All = .*", name, v)
+		}
+	}
+
+	want := map[string][]string{
+		"scope": {logging.ScopeAPI, logging.ScopeRBAC, logging.ScopeQueue, logging.ScopeAgent},
+		"kind": {
+			string(logging.KindThought), string(logging.KindToolUse), string(logging.KindToolResult),
+			string(logging.KindMessage), string(logging.KindPrompt), string(logging.KindQuestion),
+		},
+	}
+	for name, values := range want {
+		q, _ := vars[name].Query.(string)
+		if got := strings.Split(q, ","); !slices.Equal(got, values) {
+			t.Errorf("variable %q offers %q, want %q", name, got, values)
+		}
+	}
+}
+
+// TestDashboardPanelsFilter pins every panel query to the [[ project_slug ]] streams
+// and to all six filters, so no panel silently ignores a dropdown.
+func TestDashboardPanelsFilter(t *testing.T) {
+	d := load(t)
+	if len(d.Panels) == 0 {
+		t.Fatal("dashboard has no panels")
+	}
+	for _, p := range d.Panels {
+		if len(p.Targets) == 0 {
+			t.Errorf("panel %q has no query", p.Title)
+			continue
+		}
+		for _, tg := range p.Targets {
+			for _, want := range []string{
+				`kubernetes_namespace_name="$namespace"`,
+				`| json | service="` + logging.Service + `"`,
+			} {
+				if !strings.Contains(tg.Expr, want) {
+					t.Errorf("panel %q query lacks %s", p.Title, want)
+				}
+			}
+			for _, f := range filters {
+				if !strings.Contains(tg.Expr, `| `+f+`=~"$`+f+`"`) {
+					t.Errorf("panel %q query does not filter on $%s", p.Title, f)
+				}
+			}
+		}
+	}
+}

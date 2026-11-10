@@ -1,0 +1,211 @@
+package config
+
+import (
+	"testing"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+func mustLoad(t *testing.T, v *viper.Viper) Config {
+	t.Helper()
+	cfg, err := Load(v)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
+}
+
+func TestDefault(t *testing.T) {
+	cfg := Default()
+	if cfg.Addr != ":8080" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, ":8080")
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "info")
+	}
+	if cfg.RedisAddr != "" {
+		t.Errorf("RedisAddr = %q, want empty default", cfg.RedisAddr)
+	}
+	if cfg.RedisPassword != "" {
+		t.Errorf("RedisPassword = %q, want empty default", cfg.RedisPassword)
+	}
+	if cfg.DatabaseDSN != "" {
+		t.Errorf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, "")
+	}
+	if cfg.AdminSub != "" {
+		t.Errorf("AdminSub = %q, want empty default", cfg.AdminSub)
+	}
+	if cfg.GoogleClientID != "" {
+		t.Errorf("GoogleClientID = %q, want empty default", cfg.GoogleClientID)
+	}
+	if cfg.GoogleClientSecret != "" {
+		t.Errorf("GoogleClientSecret = %q, want empty default", cfg.GoogleClientSecret)
+	}
+	if cfg.GoogleRedirectURI != "" {
+		t.Errorf("GoogleRedirectURI = %q, want empty default", cfg.GoogleRedirectURI)
+	}
+}
+
+func TestLoadUsesDefaultsWhenEnvironmentIsEmpty(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_ADDR", "")
+	t.Setenv("[[ env_prefix ]]_LOG_LEVEL", "")
+	t.Setenv("[[ env_prefix ]]_DATABASE_DSN", "")
+	v := NewViper()
+	cfg := mustLoad(t, v)
+	if want := Default(); cfg != want {
+		t.Errorf("Load() = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoadReadsEnvironment(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_ADDR", "127.0.0.1:9090")
+	t.Setenv("[[ env_prefix ]]_LOG_LEVEL", "debug")
+	t.Setenv("[[ env_prefix ]]_DATABASE_DSN", "postgres://[[ ident ]]:[[ ident ]]@localhost:5432/[[ ident ]]")
+
+	cfg := mustLoad(t, NewViper())
+	if cfg.Addr != "127.0.0.1:9090" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:9090")
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "debug")
+	}
+	if want := "postgres://[[ ident ]]:[[ ident ]]@localhost:5432/[[ ident ]]"; cfg.DatabaseDSN != want {
+		t.Errorf("DatabaseDSN = %q, want %q", cfg.DatabaseDSN, want)
+	}
+}
+
+func TestLoadReadsRedisEnvironment(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_REDIS_ADDR", "127.0.0.1:6379")
+	t.Setenv("[[ env_prefix ]]_REDIS_PASSWORD", "secret")
+
+	cfg := mustLoad(t, NewViper())
+	if cfg.RedisAddr != "127.0.0.1:6379" {
+		t.Errorf("RedisAddr = %q, want %q", cfg.RedisAddr, "127.0.0.1:6379")
+	}
+	if cfg.RedisPassword != "secret" {
+		t.Errorf("RedisPassword = %q, want %q", cfg.RedisPassword, "secret")
+	}
+}
+
+func TestRedisFlagOverridesEnvironment(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_REDIS_ADDR", "127.0.0.1:6379")
+
+	v := NewViper()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	if err := BindFlags(fs, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Parse([]string{"--redis-addr", ":9999"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := mustLoad(t, v)
+	if cfg.RedisAddr != ":9999" {
+		t.Errorf("RedisAddr = %q, want the flag value %q", cfg.RedisAddr, ":9999")
+	}
+}
+
+func TestFlagOverridesEnvironment(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_ADDR", "127.0.0.1:9090")
+	t.Setenv("[[ env_prefix ]]_LOG_LEVEL", "debug")
+	t.Setenv("[[ env_prefix ]]_DATABASE_DSN", "postgres://[[ ident ]]:[[ ident ]]@localhost:5432/[[ ident ]]")
+
+	v := NewViper()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	if err := BindFlags(fs, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Parse([]string{
+		"--addr", ":7070",
+		"--database-dsn", "postgres://other@localhost:5433/other",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := mustLoad(t, v)
+	if cfg.Addr != ":7070" {
+		t.Errorf("Addr = %q, want the flag value %q", cfg.Addr, ":7070")
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want the env value %q (flag not set)", cfg.LogLevel, "debug")
+	}
+	if want := "postgres://other@localhost:5433/other"; cfg.DatabaseDSN != want {
+		t.Errorf("DatabaseDSN = %q, want the flag value %q", cfg.DatabaseDSN, want)
+	}
+}
+
+func TestRedisPasswordIsNotAFlag(t *testing.T) {
+	fs := pflag.NewFlagSet("t", pflag.ContinueOnError)
+	if err := BindFlags(fs, viper.New()); err != nil {
+		t.Fatalf("BindFlags: %v", err)
+	}
+	if fs.Lookup("redis-password") != nil {
+		t.Error("--redis-password exists; the password must come from [[ env_prefix ]]_REDIS_PASSWORD only, so it never shows in process args")
+	}
+}
+
+// TestAdminSubFromEnv proves the user to bootstrap as the global Admin is read
+// from [[ env_prefix ]]_ADMIN_SUB and trimmed.
+func TestAdminSubFromEnv(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_ADMIN_SUB", " 104242424242424242424 ")
+	cfg := mustLoad(t, NewViper())
+	if cfg.AdminSub != "104242424242424242424" {
+		t.Errorf("AdminSub = %q, want %q", cfg.AdminSub, "104242424242424242424")
+	}
+}
+
+// TestGoogleConfigFromEnv proves the Google OAuth fields are read from the
+// environment and trimmed.
+func TestGoogleConfigFromEnv(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_GOOGLE_CLIENT_ID", " 123.apps.googleusercontent.com ")
+	t.Setenv("[[ env_prefix ]]_GOOGLE_CLIENT_SECRET", " client-secret-1 ")
+	t.Setenv("[[ env_prefix ]]_GOOGLE_REDIRECT_URI", " https://example.dev/auth/google/callback ")
+
+	cfg := mustLoad(t, NewViper())
+	if cfg.GoogleClientID != "123.apps.googleusercontent.com" {
+		t.Errorf("GoogleClientID = %q, want the trimmed env value", cfg.GoogleClientID)
+	}
+	if cfg.GoogleClientSecret != "client-secret-1" {
+		t.Errorf("GoogleClientSecret = %q, want the trimmed env value", cfg.GoogleClientSecret)
+	}
+	if want := "https://example.dev/auth/google/callback"; cfg.GoogleRedirectURI != want {
+		t.Errorf("GoogleRedirectURI = %q, want %q", cfg.GoogleRedirectURI, want)
+	}
+}
+
+// TestGoogleFlagOverridesEnvironment proves a flag set on the command line
+// wins over the environment, and an unset flag does not.
+func TestGoogleFlagOverridesEnvironment(t *testing.T) {
+	t.Setenv("[[ env_prefix ]]_GOOGLE_CLIENT_ID", "env-id")
+	t.Setenv("[[ env_prefix ]]_GOOGLE_REDIRECT_URI", "https://env.example/callback")
+
+	v := NewViper()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	if err := BindFlags(fs, v); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Parse([]string{"--google-client-id", "flag-id"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := mustLoad(t, v)
+	if cfg.GoogleClientID != "flag-id" {
+		t.Errorf("GoogleClientID = %q, want the flag value %q", cfg.GoogleClientID, "flag-id")
+	}
+	if want := "https://env.example/callback"; cfg.GoogleRedirectURI != want {
+		t.Errorf("GoogleRedirectURI = %q, want the env value %q (flag not set)", cfg.GoogleRedirectURI, want)
+	}
+}
+
+// TestGoogleClientSecretIsNotAFlag proves the secret comes from the
+// environment only, so it never shows in process args.
+func TestGoogleClientSecretIsNotAFlag(t *testing.T) {
+	fs := pflag.NewFlagSet("t", pflag.ContinueOnError)
+	if err := BindFlags(fs, viper.New()); err != nil {
+		t.Fatalf("BindFlags: %v", err)
+	}
+	if fs.Lookup("google-client-secret") != nil {
+		t.Error("--google-client-secret exists; the secret must come from [[ env_prefix ]]_GOOGLE_CLIENT_SECRET only, so it never shows in process args")
+	}
+}

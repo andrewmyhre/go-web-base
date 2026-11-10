@@ -1,0 +1,19 @@
+import { sveltekit } from '@sveltejs/kit/vite';
+import { svelteTesting } from '@testing-library/svelte/vite';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+	plugins: [sveltekit(), svelteTesting()],
+	server: {
+		// `pnpm dev` against a local API (`go run ./cmd/[[ project_slug ]] serve`):
+		// the same paths the dev ingress sends to the API, so the app stays
+		// same-origin and the session cookie works.
+		proxy: Object.fromEntries(
+			['/auth', '/me', '/health', '/openapi.json'].map((p) => [p, 'http://localhost:8080'])
+		)
+	},
+	test: {
+		environment: 'happy-dom',
+		include: ['src/**/*.test.ts']
+	}
+});

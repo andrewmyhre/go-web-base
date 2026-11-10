@@ -1,0 +1,21 @@
+import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+
+// Vitest runs from ui/, so static/ is relative to the working directory.
+const staticDir = 'static/';
+const manifest = JSON.parse(readFileSync(staticDir + 'manifest.webmanifest', 'utf8'));
+
+describe('web app manifest', () => {
+	it('is installable: name, standalone, start_url inside scope', () => {
+		expect(manifest.name).toBe('[[ project_name ]]');
+		expect(manifest.display).toBe('standalone');
+		expect(manifest.start_url).toBe('/');
+		expect(manifest.scope).toBe('/');
+	});
+
+	it.each(['192x192', '512x512'])('has a %s PNG icon that exists', (size) => {
+		const icon = manifest.icons.find((i: { sizes: string; type: string }) => i.sizes === size && i.type === 'image/png');
+		expect(icon).toBeTruthy();
+		expect(existsSync(staticDir + icon.src.replace(/^\//, ''))).toBe(true);
+	});
+});

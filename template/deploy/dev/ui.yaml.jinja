@@ -1,0 +1,59 @@
+# The [[ project_slug ]] UI in dev: the static SvelteKit build behind nginx
+# (deploy/ui.Dockerfile). The image tag below is a placeholder: deploy-dev in
+# .woodpecker.yml renders it to the commit's tag in a temporary copy and
+# applies that, so do not `kubectl apply` this file by hand without setting
+# the image too (README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: [[ project_slug ]]-ui
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/name: [[ project_slug ]]-ui, app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: [[ project_slug ]]-ui } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: [[ project_slug ]]-ui, app.kubernetes.io/part-of: [[ project_slug ]] }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # nginx-unprivileged's nginx user.
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ui
+          image: [[ registry ]]/[[ project_slug ]]-ui:set-by-pipeline
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          # nginx writes its pid and temp files under /tmp.
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: [[ project_slug ]]-ui
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/name: [[ project_slug ]]-ui, app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  selector: { app.kubernetes.io/name: [[ project_slug ]]-ui }
+  ports: [{ name: http, port: 80, targetPort: http }]

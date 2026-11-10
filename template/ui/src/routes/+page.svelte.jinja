@@ -1,0 +1,57 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import UserBadge from '$lib/components/UserBadge.svelte';
+	import AccountMenu from '$lib/components/AccountMenu.svelte';
+	import { getMe, signOut, SIGN_IN_PATH, type Me } from '$lib/api';
+
+	type State =
+		| { kind: 'loading' }
+		| { kind: 'signed-out' }
+		| { kind: 'signed-in'; user: Me }
+		| { kind: 'error' };
+
+	let view = $state<State>({ kind: 'loading' });
+
+	async function load() {
+		view = { kind: 'loading' };
+		try {
+			const user = await getMe();
+			view = user ? { kind: 'signed-in', user } : { kind: 'signed-out' };
+		} catch {
+			view = { kind: 'error' };
+		}
+	}
+
+	onMount(load);
+
+	// Sign out ends the session server-side, then shows the sign-in page.
+	async function onSignOut() {
+		try {
+			await signOut();
+			view = { kind: 'signed-out' };
+		} catch {
+			view = { kind: 'error' };
+		}
+	}
+</script>
+
+{#if view.kind === 'signed-in'}
+	<header class="topbar">
+		<AccountMenu user={view.user} {onSignOut} />
+	</header>
+{/if}
+<main>
+	<h1>Home</h1>
+	{#if view.kind === 'loading'}
+		<p class="status">Loading your account...</p>
+	{:else if view.kind === 'signed-out'}
+		<p class="status">You are not signed in.</p>
+		<!-- A full page load: sign-in is a server redirect, not an app route. -->
+		<a class="button" href={SIGN_IN_PATH} data-sveltekit-reload>Sign in with Google</a>
+	{:else if view.kind === 'signed-in'}
+		<UserBadge name={view.user.name} avatar={view.user.avatar} />
+	{:else}
+		<p class="status" role="alert">Could not reach [[ project_name ]]. Try again.</p>
+		<button class="button" type="button" onclick={load}>Retry</button>
+	{/if}
+</main>

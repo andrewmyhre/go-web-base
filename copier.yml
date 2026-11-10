@@ -1,0 +1,104 @@
+_min_copier_version: "9.19.1"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_templates_suffix: .jinja
+
+# Square-bracket delimiters: the template's Svelte uses {#if}, which the
+# default Jinja delimiters read as a comment, and Go format strings use [%q].
+_envops:
+  block_start_string: "[[%"
+  block_end_string: "%]]"
+  variable_start_string: "[["
+  variable_end_string: "]]"
+  comment_start_string: "[[#"
+  comment_end_string: "#]]"
+  keep_trailing_newline: true
+
+_message_after_copy: |
+  Generated [[ project_slug ]]. Nothing works on the cluster until the
+  per-project setup checklist in the go-web-base README is done.
+
+project_slug:
+  type: str
+  help: Project slug (binary, image, Deployment and namespace names)
+  validator: >-
+    [[% if not (project_slug | regex_search('^[a-z][a-z0-9-]{0,40}[a-z0-9]$')) %]]
+    Lowercase letters, digits and hyphens; starts with a letter, 2-42 characters.
+    [[% endif %]]
+
+project_name:
+  type: str
+  help: Display name (UI title, PWA manifest, prose)
+  default: "[[ project_slug | replace('-', ' ') | title ]]"
+
+github_repo:
+  type: str
+  help: GitHub repository, owner/name
+  default: "andrewmyhre/[[ project_slug ]]"
+
+go_module:
+  type: str
+  help: Go module path
+  default: "github.com/[[ github_repo ]]"
+  validator: >-
+    [[% if not (go_module | regex_search('^[a-z0-9][a-z0-9._/-]*[a-z0-9]$')) %]]
+    Not a plausible Go module path.
+    [[% endif %]]
+
+env_prefix:
+  type: str
+  help: Environment variable prefix (PREFIX_ADDR, PREFIX_DATABASE_DSN, ...). Its lower case names cookies, the Postgres user and Redis keys.
+  default: "[[ project_slug | upper | replace('-', '_') ]]"
+  validator: >-
+    [[% if not (env_prefix | regex_search('^[A-Z][A-Z0-9_]*[A-Z0-9]$')) %]]
+    Upper case letters, digits and underscores; starts with a letter.
+    [[% endif %]]
+
+dev_host:
+  type: str
+  help: Hostname of the dev environment
+  default: "[[ project_slug ]]-dev.immutablesoftware.dev"
+
+dev_namespace:
+  type: str
+  help: Kubernetes namespace for dev
+  default: "[[ project_slug ]]-dev"
+
+test_namespace:
+  type: str
+  help: Kubernetes namespace for the throwaway test Postgres and Redis
+  default: "[[ project_slug ]]-test"
+
+registry:
+  type: str
+  help: Image registry (plain HTTP, pushed to by BuildKit)
+  default: "192.168.0.10:30500"
+
+test_postgres_nodeport:
+  type: int
+  help: NodePort for the test Postgres (must be unique on the cluster)
+  default: 30543
+  validator: "[[% if not (30000 <= test_postgres_nodeport <= 32767) %]]Must be 30000-32767.[[% endif %]]"
+
+test_redis_nodeport:
+  type: int
+  help: NodePort for the test Redis (must be unique on the cluster)
+  default: 30637
+  validator: "[[% if not (30000 <= test_redis_nodeport <= 32767) %]]Must be 30000-32767.[[% endif %]]"
+
+admin_sub:
+  type: str
+  help: Google OIDC sub of the global Admin (leave empty and set it after the first sign-in)
+  default: ""
+  validator: "[[% if admin_sub and not (admin_sub | regex_search('^[0-9]+$')) %]]A Google sub is digits only, never an email.[[% endif %]]"
+
+# Derived values: never asked, never stored, recomputed on every update.
+ident:
+  type: str
+  when: false
+  default: "[[ env_prefix | lower ]]"
+
+dev_subdomain:
+  type: str
+  when: false
+  default: "[[ dev_host.split('.')[0] ]]"

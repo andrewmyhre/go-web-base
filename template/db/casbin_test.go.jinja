@@ -1,0 +1,409 @@
+package db
+
+import (
+	"context"
+	"testing"
+
+	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/model"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	sqlc "[[ go_module ]]/db/sqlc"
+)
+
+// rbacModel is a minimal RBAC model: subject, object, action with allow
+// roles. It matches the rules this test suite stores.
+const rbacModel = `
+[request_definition]
+r = sub, obj, act
+
+[policy_definition]
+p = sub, obj, act
+
+[role_definition]
+g = _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub) && r.obj == p.obj && r.act == p.act
+`
+
+// testAdapter migrates a fresh schema of its own (see testSchema) and
+// returns a pool bound to it plus an adapter on that pool.
+func testAdapter(t *testing.T) (*pgxpool.Pool, *CasbinAdapter) {
+	t.Helper()
+	cfg := testSchema(t)
+	if err := MigrateWithConfig(context.Background(), cfg.ConnConfig); err != nil {
+		t.Fatalf("migrate test schema: %v", err)
+	}
+	pool := testPool(t, cfg)
+	return pool, NewCasbinAdapter(pool)
+}
+
+func mustModel(t *testing.T) model.Model {
+	t.Helper()
+	m, err := model.NewModelFromString(rbacModel)
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	return m
+}
+
+// ruleCount returns how many rows of the casbin_rule table have the ptype.
+func ruleCount(t *testing.T, pool *pgxpool.Pool, ptype string) int {
+	t.Helper()
+	rows, err := sqlc.New(pool).LoadCasbinRulesByPtype(context.Background(), ptype)
+	if err != nil {
+		t.Fatalf("count %q rules: %v", ptype, err)
+	}
+	return len(rows)
+}
+
+func sameRule(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestCasbinAdapterRoundTrip(t *testing.T) {
+	_, adapter := testAdapter(t)
+
+	// Seed: two direct rules, one batch, one role assignment.
+	seeds := []func() error{
+		func() error { return adapter.AddPolicy("p", "p", []string{"alice", "books", "read"}) },
+		func() error { return adapter.AddPolicy("p", "p", []string{"bob", "data", "write"}) },
+		func() error { return adapter.AddPolicies("p", "p", [][]string{{"carol", "emails", "send"}}) },
+		func() error { return adapter.AddPolicies("g", "g", [][]string{{"alice", "admin"}, {"carol", "admin"}}) },
+	}
+	for _, seed := range seeds {
+		if err := seed(); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	// Adding the same rule twice must fail: casbin_rule_unique_idx.
+	if err := adapter.AddPolicy("p", "p", []string{"alice", "books", "read"}); err == nil {
+		t.Error("duplicate AddPolicy succeeded, want a conflict error")
+	}
+
+	// The stored rules load into a model ...
+	m := mustModel(t)
+	if err := adapter.LoadPolicy(m); err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	if got := len(m["p"]["p"].Policy); got != 3 {
+		t.Errorf("p rules = %d, want 3: %v", got, m["p"]["p"].Policy)
+	}
+	if got := len(m["g"]["g"].Policy); got != 2 {
+		t.Errorf("g rules = %d, want 2: %v", got, m["g"]["g"].Policy)
+	}
+
+	// ... and an enforcer built on the adapter enforces them.
+	e, err := casbin.NewEnforcer(mustModel(t), adapter)
+	if err != nil {
+		t.Fatalf("new enforcer: %v", err)
+	}
+	if ok, err := e.Enforce("alice", "books", "read"); err != nil || !ok {
+		t.Errorf("alice/books/read = %v, %v; want true, nil", ok, err)
+	}
+	if ok, err := e.Enforce("carol", "emails", "send"); err != nil || !ok {
+		t.Errorf("carol/emails/send = %v, %v; want true, nil", ok, err)
+	}
+	if ok, err := e.Enforce("bob", "books", "read"); err != nil || ok {
+		t.Errorf("bob/books/read = %v, %v; want false, nil", ok, err)
+	}
+}
+
+func TestCasbinAdapterRemove(t *testing.T) {
+	pool, adapter := testAdapter(t)
+
+	if err := adapter.AddPolicy("p", "p", []string{"alice", "books", "read"}); err != nil {
+		t.Fatalf("seed alice: %v", err)
+	}
+	if err := adapter.AddPolicies("p", "p", [][]string{{"carol", "emails", "send"}, {"carol", "notes", "edit"}}); err != nil {
+		t.Fatalf("seed carol: %v", err)
+	}
+	if err := adapter.AddPolicies("g", "g", [][]string{{"alice", "admin"}, {"carol", "admin"}}); err != nil {
+		t.Fatalf("seed g: %v", err)
+	}
+
+	// Remove one exact rule; a fresh enforcer no longer grants it.
+	if err := adapter.RemovePolicy("p", "p", []string{"carol", "emails", "send"}); err != nil {
+		t.Fatalf("RemovePolicy: %v", err)
+	}
+	if got := ruleCount(t, pool, "p"); got != 2 {
+		t.Errorf("p rules after RemovePolicy = %d, want 2", got)
+	}
+	e, err := casbin.NewEnforcer(mustModel(t), adapter)
+	if err != nil {
+		t.Fatalf("new enforcer: %v", err)
+	}
+	if ok, err := e.Enforce("carol", "emails", "send"); err != nil || ok {
+		t.Errorf("carol/emails/send after RemovePolicy = %v, %v; want false, nil", ok, err)
+	}
+	if ok, err := e.Enforce("carol", "notes", "edit"); err != nil || !ok {
+		t.Errorf("carol/notes/edit after removing another rule = %v, %v; want true, nil", ok, err)
+	}
+
+	// Removing a rule that is not stored is a no-op.
+	if err := adapter.RemovePolicy("p", "p", []string{"nobody", "nothing", "nowhere"}); err != nil {
+		t.Errorf("RemovePolicy of a missing rule: %v, want nil", err)
+	}
+
+	// Remove every rule whose first field is carol; alice's rule and all g
+	// rules stay.
+	if err := adapter.RemoveFilteredPolicy("p", "p", 0, "carol"); err != nil {
+		t.Fatalf("RemoveFilteredPolicy: %v", err)
+	}
+	if got := ruleCount(t, pool, "p"); got != 1 {
+		t.Errorf("p rules after RemoveFilteredPolicy = %d, want 1 (alice's rule)", got)
+	}
+
+	// No field values match every rule of the ptype; g is untouched.
+	if err := adapter.RemoveFilteredPolicy("p", "p", 0); err != nil {
+		t.Fatalf("RemoveFilteredPolicy all: %v", err)
+	}
+	if got := ruleCount(t, pool, "p"); got != 0 {
+		t.Errorf("p rules after RemoveFilteredPolicy = %d, want 0", got)
+	}
+	if got := ruleCount(t, pool, "g"); got != 2 {
+		t.Errorf("g rules after RemoveFilteredPolicy = %d, want 2 (unchanged)", got)
+	}
+
+	// Batch remove of the rest.
+	if err := adapter.RemovePolicies("g", "g", [][]string{{"alice", "admin"}, {"carol", "admin"}}); err != nil {
+		t.Fatalf("RemovePolicies: %v", err)
+	}
+	if got := ruleCount(t, pool, "g"); got != 0 {
+		t.Errorf("g rules after RemovePolicies = %d, want 0", got)
+	}
+}
+
+func TestCasbinAdapterSavePolicy(t *testing.T) {
+	pool, adapter := testAdapter(t)
+
+	// Seed a stale rule that SavePolicy must replace.
+	if err := adapter.AddPolicy("p", "p", []string{"stale", "rule", "here"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Build a model holding the next whole policy and save it.
+	m := mustModel(t)
+	if err := m.AddPolicy("p", "p", []string{"dave", "vault", "open"}); err != nil {
+		t.Fatalf("model.AddPolicy p: %v", err)
+	}
+	if err := m.AddPolicy("g", "g", []string{"dave", "auditor"}); err != nil {
+		t.Fatalf("model.AddPolicy g: %v", err)
+	}
+	if err := adapter.SavePolicy(m); err != nil {
+		t.Fatalf("SavePolicy: %v", err)
+	}
+	if got := ruleCount(t, pool, "p"); got != 1 {
+		t.Errorf("p rules after SavePolicy = %d, want 1 (stale rule replaced)", got)
+	}
+	if got := ruleCount(t, pool, "g"); got != 1 {
+		t.Errorf("g rules after SavePolicy = %d, want 1", got)
+	}
+	m2 := mustModel(t)
+	if err := adapter.LoadPolicy(m2); err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	if want := []string{"dave", "vault", "open"}; !sameRule(m2["p"]["p"].Policy[0], want) {
+		t.Errorf("stored p rule = %v, want %v", m2["p"]["p"].Policy[0], want)
+	}
+	if want := []string{"dave", "auditor"}; !sameRule(m2["g"]["g"].Policy[0], want) {
+		t.Errorf("stored g rule = %v, want %v", m2["g"]["g"].Policy[0], want)
+	}
+}
+
+func TestCasbinAdapterLoadFilteredPolicy(t *testing.T) {
+	pool, adapter := testAdapter(t)
+
+	if err := adapter.AddPolicies("p", "p", [][]string{{"s1", "o", "a"}, {"s2", "o", "a"}}); err != nil {
+		t.Fatalf("AddPolicies p: %v", err)
+	}
+	if err := adapter.AddPolicies("g", "g", [][]string{{"s1", "role"}}); err != nil {
+		t.Fatalf("AddPolicies g: %v", err)
+	}
+
+	m := mustModel(t)
+	if err := adapter.LoadFilteredPolicy(m, "g"); err != nil {
+		t.Fatalf("LoadFilteredPolicy: %v", err)
+	}
+	if !adapter.IsFiltered() {
+		t.Error("IsFiltered = false after LoadFilteredPolicy, want true")
+	}
+	if got := len(m["g"]["g"].Policy); got != 1 {
+		t.Errorf("g rules loaded = %d, want 1", got)
+	}
+	if got := len(m["p"]["p"].Policy); got != 0 {
+		t.Errorf("p rules loaded = %d, want 0 (filtered out)", got)
+	}
+	if got := ruleCount(t, pool, "p"); got != 2 {
+		t.Errorf("p rules still stored = %d, want 2 (filtering must not delete)", got)
+	}
+	if err := adapter.LoadPolicy(m); err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	if adapter.IsFiltered() {
+		t.Error("IsFiltered = true after a full LoadPolicy, want false")
+	}
+}
+
+// domainModel has a second grouping ptype, g2, so SavePolicy must store
+// more than the p and g assertions.
+const domainModel = `
+[request_definition]
+r = sub, obj, act
+
+[policy_definition]
+p = sub, obj, act
+
+[role_definition]
+g = _, _
+g2 = _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub) && g2(r.obj, p.obj) && r.act == p.act
+`
+
+// TestSavedRulesLoadIntoFreshEnforcer is the issue's done-when: rules saved
+// through the adapter by one enforcer load back, value for value, into a
+// fresh enforcer on a fresh pool and adapter.
+func TestSavedRulesLoadIntoFreshEnforcer(t *testing.T) {
+	cfg := testSchema(t)
+	if err := MigrateWithConfig(context.Background(), cfg.ConnConfig); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	m1, err := model.NewModelFromString(domainModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1, err := casbin.NewEnforcer(m1, NewCasbinAdapter(testPool(t, cfg)))
+	if err != nil {
+		t.Fatalf("first enforcer: %v", err)
+	}
+	// Auto-saved through AddPolicy and friends ...
+	if _, err := e1.AddPolicy("admin", "docs", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e1.AddGroupingPolicy("alice", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e1.AddNamedGroupingPolicy("g2", "handbook", "docs"); err != nil {
+		t.Fatal(err)
+	}
+	// ... and then the whole policy saved again with SavePolicy, which
+	// replaces every stored row.
+	e1.EnableAutoSave(false)
+	if _, err := e1.AddPolicy("admin", "docs", "write"); err != nil {
+		t.Fatal(err)
+	}
+	e1.EnableAutoSave(true)
+	if err := e1.SavePolicy(); err != nil {
+		t.Fatalf("SavePolicy: %v", err)
+	}
+
+	m2, err := model.NewModelFromString(domainModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := casbin.NewEnforcer(m2, NewCasbinAdapter(testPool(t, cfg)))
+	if err != nil {
+		t.Fatalf("fresh enforcer: %v", err)
+	}
+	for _, c := range []struct {
+		name      string
+		want, got func() ([][]string, error)
+	}{
+		{"p", e1.GetPolicy, e2.GetPolicy},
+		{"g", e1.GetGroupingPolicy, e2.GetGroupingPolicy},
+		{"g2", func() ([][]string, error) { return e1.GetNamedGroupingPolicy("g2") },
+			func() ([][]string, error) { return e2.GetNamedGroupingPolicy("g2") }},
+	} {
+		want, err := c.want()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.got()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameRules(got, want) {
+			t.Errorf("%s rules loaded = %v, want %v", c.name, got, want)
+		}
+	}
+	if ok, err := e2.Enforce("alice", "handbook", "write"); err != nil || !ok {
+		t.Errorf("alice/handbook/write = %v, %v; want true, nil", ok, err)
+	}
+	if ok, err := e2.Enforce("bob", "handbook", "read"); err != nil || ok {
+		t.Errorf("bob/handbook/read = %v, %v; want false, nil", ok, err)
+	}
+}
+
+// sameRules compares two rule lists in order.
+func sameRules(a, b [][]string) bool {
+	if len(a) != len(b) || len(a) == 0 {
+		return len(a) == len(b)
+	}
+	for i := range a {
+		if !sameRule(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestRemoveFilteredPolicyWildcards(t *testing.T) {
+	pool, adapter := testAdapter(t)
+	if err := adapter.AddPolicies("p", "p", [][]string{
+		{"alice", "books", "read"},
+		{"bob", "books", "read"},
+		{"alice", "data", "read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AddPolicies("g", "g", [][]string{{"alice", "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An empty field value is Casbin's wildcard: subject any, object books.
+	if err := adapter.RemoveFilteredPolicy("p", "p", 0, "", "books"); err != nil {
+		t.Fatalf("RemoveFilteredPolicy: %v", err)
+	}
+	m := mustModel(t)
+	if err := adapter.LoadPolicy(m); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m["p"]["p"].Policy, [][]string{{"alice", "data", "read"}}; !sameRules(got, want) {
+		t.Errorf("p rules after wildcard removal = %v, want %v", got, want)
+	}
+
+	// A value aimed past the end of a two-value rule matches nothing: the
+	// stored column is NULL, not a wildcard.
+	if err := adapter.RemoveFilteredPolicy("g", "g", 2, "x"); err != nil {
+		t.Fatalf("RemoveFilteredPolicy past the rule: %v", err)
+	}
+	if got := ruleCount(t, pool, "g"); got != 1 {
+		t.Errorf("g rules after a filter on an unused column = %d, want 1", got)
+	}
+
+	// Out-of-range filters are errors, not panics.
+	for _, c := range []struct {
+		index  int
+		values []string
+	}{{-1, nil}, {6, nil}, {6, []string{"a"}}, {5, []string{"a", "b"}}} {
+		if err := adapter.RemoveFilteredPolicy("p", "p", c.index, c.values...); err == nil {
+			t.Errorf("RemoveFilteredPolicy(%d, %v) = nil, want an error", c.index, c.values)
+		}
+	}
+}

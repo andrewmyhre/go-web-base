@@ -1,0 +1,38 @@
+{
+  "name": "[[ project_slug ]]-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The [[ project_slug ]] UI: a static SvelteKit PWA that signs in and shows the signed-in user.",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "svelte-kit sync && vitest run",
+    "generate": "pnpm run generate:spec && pnpm run generate:client",
+    "generate:spec": "cd .. && go run ./cmd/[[ project_slug ]] openapi > ui/openapi.json",
+    "generate:client": "openapi-typescript openapi.json --output src/lib/api/openapi.d.ts",
+    "check:client": "openapi-typescript openapi.json --output .client-check/openapi.d.ts && diff -u src/lib/api/openapi.d.ts .client-check/openapi.d.ts"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "3.0.10",
+    "@sveltejs/kit": "2.70.3",
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "@testing-library/svelte": "5.4.2",
+    "happy-dom": "20.14.6",
+    "openapi-typescript": "7.13.0",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.7",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
+  }
+}

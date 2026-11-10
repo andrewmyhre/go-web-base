@@ -1,0 +1,81 @@
+# The [[ project_slug ]] API in dev. The image tag below is a placeholder: the
+# deploy-dev step in .woodpecker.yml renders it to the commit's tag in a
+# temporary copy and applies that copy on every push to main, so env changes
+# here reach the cluster on merge. Do not `kubectl apply` this file by hand
+# without setting the image too (README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: [[ project_slug ]]-api
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/name: [[ project_slug ]]-api, app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: [[ project_slug ]]-api } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: [[ project_slug ]]-api, app.kubernetes.io/part-of: [[ project_slug ]] }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: [[ registry ]]/[[ project_slug ]]-api:set-by-pipeline
+          args: ["serve"]
+          env:
+            - { name: [[ env_prefix ]]_ADDR, value: ":8080" }
+            - { name: [[ env_prefix ]]_LOG_LEVEL, value: debug }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-services, key: postgres-password } }
+            # $(POSTGRES_PASSWORD) is expanded by the kubelet from the entry
+            # above; the password is hex, so it needs no URL escaping.
+            - name: [[ env_prefix ]]_DATABASE_DSN
+              value: postgres://[[ ident ]]:$(POSTGRES_PASSWORD)@postgres.[[ dev_namespace ]].svc.cluster.local:5432/[[ ident ]]?sslmode=disable
+            - { name: [[ env_prefix ]]_REDIS_ADDR, value: "redis.[[ dev_namespace ]].svc.cluster.local:6379" }
+            - name: [[ env_prefix ]]_REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-services, key: redis-password } }
+            # Google OAuth sign-in. The client id and secret come from the
+            # [[ project_slug ]]-google-oauth SealedSecret (client-id / client-secret);
+            # the secret is read from the environment only, so it never appears
+            # in process args or the pod spec. Leaving the id unset disables
+            # sign-in (only /health is served). The redirect URI must match one
+            # registered with the Google OAuth client (google-oauth-sealed.yaml).
+            - name: [[ env_prefix ]]_GOOGLE_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: [[ project_slug ]]-google-oauth, key: client-id } }
+            - name: [[ env_prefix ]]_GOOGLE_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: [[ project_slug ]]-google-oauth, key: client-secret } }
+            # The global Admin, bootstrapped at startup (db/rbac.go): the
+            # owner's Google account ID (the OIDC sub), never an email. Empty
+            # skips the bootstrap, and then nobody can sign in.
+            - { name: [[ env_prefix ]]_ADMIN_SUB, value: "[[ admin_sub ]]" }
+            - { name: [[ env_prefix ]]_GOOGLE_REDIRECT_URI, value: "https://[[ dev_host ]]/auth/google/callback" }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: [[ project_slug ]]-api
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/name: [[ project_slug ]]-api, app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  selector: { app.kubernetes.io/name: [[ project_slug ]]-api }
+  ports: [{ name: http, port: 80, targetPort: http }]

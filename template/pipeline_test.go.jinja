@@ -1,0 +1,190 @@
+package [[ ident ]]
+
+import (
+	"os"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"go.yaml.in/yaml/v3"
+)
+
+// TestWoodpeckerPipeline pins the pull-request pipeline in .woodpecker.yml:
+// it must exist at the repository root and keep a test step that runs the
+// Go tests and a lint step that runs gofmt and go vet. Its `when:` runs it on
+// every pull request and on pushes to main.
+func TestWoodpeckerPipeline(t *testing.T) {
+	data, err := os.ReadFile(".woodpecker.yml")
+	if err != nil {
+		t.Fatalf("read .woodpecker.yml: %v", err)
+	}
+
+	s := string(data)
+	for _, want := range []string{
+		"steps:",
+		"- event: pull_request",
+		"branch: main",
+		"name: test",
+		"name: lint",
+		"go test ./...",
+		"from_secret: [[ env_prefix ]]_TEST_DATABASE_URL",
+		"from_secret: [[ env_prefix ]]_TEST_REDIS_ADDR",
+		"from_secret: [[ env_prefix ]]_TEST_REDIS_PASSWORD",
+		"gofmt -l .",
+		"go vet ./...",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("pipeline is missing %q", want)
+		}
+	}
+	// The skip switch is for checkouts with no test services. This
+	// project's own pipeline has them, so it must never skip.
+	if strings.Contains(s, "SKIP_SERVICE_TESTS") {
+		t.Error("pipeline sets SKIP_SERVICE_TESTS; its tests must run against the test services")
+	}
+}
+
+// pipelineStep is the part of a Woodpecker step the image pin reads.
+type pipelineStep struct {
+	Name        string              `yaml:"name"`
+	DependsOn   []string            `yaml:"depends_on"`
+	When        []map[string]string `yaml:"when"`
+	Environment map[string]any      `yaml:"environment"`
+	Commands    []string            `yaml:"commands"`
+	Backend     struct {
+		Kubernetes struct {
+			ServiceAccountName string `yaml:"serviceAccountName"`
+		} `yaml:"kubernetes"`
+	} `yaml:"backend_options"`
+}
+
+// pipelineStepNamed parses .woodpecker.yml and returns the step called name,
+// failing the test if there is none.
+func pipelineStepNamed(t *testing.T, name string) pipelineStep {
+	t.Helper()
+	data, err := os.ReadFile(".woodpecker.yml")
+	if err != nil {
+		t.Fatalf("read .woodpecker.yml: %v", err)
+	}
+	var doc struct {
+		Steps []pipelineStep `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse .woodpecker.yml: %v", err)
+	}
+	for _, s := range doc.Steps {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("pipeline has no %s step", name)
+	return pipelineStep{}
+}
+
+// TestDeployDevStep pins the dev rollout: deploy-dev must run only on a push
+// to main (the workflow `when:` also admits pull_request, so this filter is
+// what keeps a pull request from deploying), wait for build-api and build-ui
+// so the images it rolls out exist, run as the narrow [[ project_slug ]]-deployer
+// ServiceAccount rather than the namespace default, render the commit's tag
+// into the app manifests and apply them, wait for both rollouts, and fail
+// the pipeline (exit non-zero) unless the smoke checks return 200.
+// TestDeployDevAppliesOnlyTheAppManifests pins the apply itself.
+func TestDeployDevStep(t *testing.T) {
+	step := pipelineStepNamed(t, "deploy-dev")
+
+	want := []map[string]string{{"event": "push", "branch": "main"}}
+	if !reflect.DeepEqual(step.When, want) {
+		t.Errorf("deploy-dev when = %v, want exactly %v (push to main only)", step.When, want)
+	}
+
+	for _, d := range []string{"build-api", "build-ui"} {
+		if !slices.Contains(step.DependsOn, d) {
+			t.Errorf("deploy-dev depends_on = %v, missing %q", step.DependsOn, d)
+		}
+	}
+
+	if got := step.Backend.Kubernetes.ServiceAccountName; got != "[[ project_slug ]]-deployer" {
+		t.Errorf("deploy-dev serviceAccountName = %q, want [[ project_slug ]]-deployer", got)
+	}
+
+	if got := step.Environment["REGISTRY"]; got != "[[ registry ]]" {
+		t.Errorf("deploy-dev REGISTRY = %q, want [[ registry ]]", got)
+	}
+	if got := step.Environment["NAMESPACE"]; got != "[[ dev_namespace ]]" {
+		t.Errorf("deploy-dev NAMESPACE = %q, want [[ dev_namespace ]]", got)
+	}
+
+	cmds := strings.Join(step.Commands, "\n")
+	for _, w := range []string{
+		"set -eu",
+		`TAG="$${CI_COMMIT_SHA}"`,
+		`sed "s#:set-by-pipeline#:$${TAG}#"`,
+		`grep -q "image: $${REGISTRY}/[[ project_slug ]]-api:$${TAG}"`,
+		`grep -q "image: $${REGISTRY}/[[ project_slug ]]-ui:$${TAG}"`,
+		"rollout status deployment/[[ project_slug ]]-api --timeout=",
+		"rollout status deployment/[[ project_slug ]]-ui --timeout=",
+		"[[ project_slug ]]-api.$${NAMESPACE}.svc.cluster.local/health",
+		"[[ project_slug ]]-ui.$${NAMESPACE}.svc.cluster.local/",
+		`!= "200"`,
+		"exit 1",
+	} {
+		if !strings.Contains(cmds, w) {
+			t.Errorf("deploy-dev commands are missing %q", w)
+		}
+	}
+}
+
+// TestBuildAPIStep pins the image build: build-api must exist, wait for
+// test and lint, push [[ project_slug ]]-api to the cluster registry tagged with the
+// commit, and carry a `when:` that matches a push to main and nothing else.
+// The workflow-level `when:` also admits pull_request, so this step filter
+// is the only thing keeping a pull request from pushing an image.
+func TestBuildAPIStep(t *testing.T) {
+	data, err := os.ReadFile(".woodpecker.yml")
+	if err != nil {
+		t.Fatalf("read .woodpecker.yml: %v", err)
+	}
+	var doc struct {
+		Steps []pipelineStep `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse .woodpecker.yml: %v", err)
+	}
+
+	var step *pipelineStep
+	for i := range doc.Steps {
+		if doc.Steps[i].Name == "build-api" {
+			step = &doc.Steps[i]
+		}
+	}
+	if step == nil {
+		t.Fatal("pipeline has no build-api step")
+	}
+
+	want := []map[string]string{{"event": "push", "branch": "main"}}
+	if !reflect.DeepEqual(step.When, want) {
+		t.Errorf("build-api when = %v, want exactly %v (push to main only)", step.When, want)
+	}
+
+	for _, d := range []string{"test", "lint"} {
+		if !slices.Contains(step.DependsOn, d) {
+			t.Errorf("build-api depends_on = %v, missing %q", step.DependsOn, d)
+		}
+	}
+
+	if got := step.Environment["REGISTRY"]; got != "[[ registry ]]" {
+		t.Errorf("build-api REGISTRY = %q, want [[ registry ]]", got)
+	}
+
+	cmds := strings.Join(step.Commands, "\n")
+	for _, w := range []string{
+		"/[[ project_slug ]]-api:$${CI_COMMIT_SHA}",
+		"push=true",
+		"filename=api.Dockerfile",
+	} {
+		if !strings.Contains(cmds, w) {
+			t.Errorf("build-api commands are missing %q", w)
+		}
+	}
+}

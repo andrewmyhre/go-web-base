@@ -1,0 +1,9 @@
+.git
+.woodpecker.yml
+*.md
+docs
+deploy/test-services
+ui/node_modules
+ui/build
+ui/.svelte-kit
+ui/.client-check

@@ -1,0 +1,164 @@
+# Runs the Go tests and lint on every pull request, and on pushes to main.
+# Pushes to other branches are left out so a PR branch runs once per push,
+# not once for the push event and again for the pull_request event.
+# Woodpecker v3 syntax: steps are a named list, not the pre-2.0 map.
+#
+# build-api runs only on a push to main, after test and lint pass, and pushes
+# [[ registry ]]/[[ project_slug ]]-api:<full commit sha>. It is a buildctl client
+# talking to the cluster's shared BuildKit daemon: the registry is plain HTTP
+# and buildkitd takes no credential, so the step needs no secret. build-ui is
+# the same for [[ registry ]]/[[ project_slug ]]-ui:<full commit sha>, from
+# deploy/ui.Dockerfile, and waits for the ui step as well.
+#
+# Woodpecker substitutes dollar references in this file at load time, before
+# any shell sees them, so shell variables below are written with a doubled
+# dollar sign to reach the shell intact.
+when:
+  - event: pull_request
+  - event: push
+    branch: main
+
+steps:
+  - name: test
+    image: golang:1.26
+    # The throwaway Postgres and Redis in deploy/test-services. Tests that need
+    # them fail rather than skip when these are unset, so check them up front
+    # for a clear error.
+    environment:
+      [[ env_prefix ]]_TEST_DATABASE_URL:
+        from_secret: [[ env_prefix ]]_TEST_DATABASE_URL
+      [[ env_prefix ]]_TEST_REDIS_ADDR:
+        from_secret: [[ env_prefix ]]_TEST_REDIS_ADDR
+      [[ env_prefix ]]_TEST_REDIS_PASSWORD:
+        from_secret: [[ env_prefix ]]_TEST_REDIS_PASSWORD
+    commands:
+      - for v in [[ env_prefix ]]_TEST_DATABASE_URL [[ env_prefix ]]_TEST_REDIS_ADDR [[ env_prefix ]]_TEST_REDIS_PASSWORD; do eval "test -n \"\$$v\"" || { echo "$v is not set; add it as a Woodpecker repo secret" >&2; exit 1; }; done
+      - go test ./...
+
+  - name: lint
+    image: golang:1.26
+    commands:
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+
+  # The UI (ui/): install from the lockfile, prove the committed API client is
+  # what openapi-typescript generates from ui/openapi.json (the Go test
+  # TestCommittedOpenAPISpecIsCurrent proves that file is what the code
+  # serves), then test, type check and build. pipeline_test.go pins it.
+  - name: ui
+    image: node:22.23.4-bookworm
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd ui
+      - corepack enable
+      - pnpm install --frozen-lockfile
+      - pnpm run check:client
+      - pnpm test
+      - pnpm check
+      - pnpm build
+
+  - name: build-api
+    image: moby/buildkit:v0.28.1
+    depends_on: [test, lint]
+    # Main only: a pull request must never push an image. pipeline_test.go
+    # pins this filter.
+    when:
+      - event: push
+        branch: main
+    environment:
+      REGISTRY: [[ registry ]]
+      BUILDKIT_HOST: tcp://buildkitd.buildkit.svc.cluster.local:1234
+    commands:
+      - |
+        set -eu
+        IMAGE="$${REGISTRY}/[[ project_slug ]]-api:$${CI_COMMIT_SHA}"
+        buildctl --addr "$${BUILDKIT_HOST}" build \
+          --frontend dockerfile.v0 \
+          --local context=. \
+          --local dockerfile=deploy \
+          --opt filename=api.Dockerfile \
+          --opt target=runtime \
+          --output type=image,name=$${IMAGE},push=true,registry.insecure=true
+        echo "Pushed $${IMAGE}"
+
+  - name: build-ui
+    image: moby/buildkit:v0.28.1
+    depends_on: [test, lint, ui]
+    # Main only, like build-api; pipeline_test.go pins the filter.
+    when:
+      - event: push
+        branch: main
+    environment:
+      REGISTRY: [[ registry ]]
+      BUILDKIT_HOST: tcp://buildkitd.buildkit.svc.cluster.local:1234
+    commands:
+      - |
+        set -eu
+        IMAGE="$${REGISTRY}/[[ project_slug ]]-ui:$${CI_COMMIT_SHA}"
+        buildctl --addr "$${BUILDKIT_HOST}" build \
+          --frontend dockerfile.v0 \
+          --local context=. \
+          --local dockerfile=deploy \
+          --opt filename=ui.Dockerfile \
+          --opt target=runtime \
+          --output type=image,name=$${IMAGE},push=true,registry.insecure=true
+        echo "Pushed $${IMAGE}"
+
+  # deploy-dev applies the app manifests (deploy/dev/api.yaml, ui.yaml and
+  # ingress.yaml, nothing else) to [[ dev_namespace ]] with the images build-api
+  # and build-ui just pushed, so env, spec and routing changes reach dev on
+  # merge, in one rollout. The images are rendered into temporary copies
+  # first: the placeholder tag is never applied. It then waits for both
+  # rollouts and fails unless the API's /health and the UI's / answer 200
+  # through the in-cluster Services. Main only; pipeline_test.go pins the
+  # filter, the depends_on and the file list.
+  #
+  # Namespace, RBAC, Postgres, Redis and the sealed secrets are never applied
+  # here; they stay one-time admin applies (deploy/dev/README.md).
+  #
+  # No kubeconfig and no secret: the step runs as the [[ project_slug ]]-deployer
+  # ServiceAccount, whose Role (deploy/dev/rbac.yaml) allows only what
+  # `kubectl apply` of these three files and `rollout status` need, and
+  # kubectl finds the mounted token on its own.
+  - name: deploy-dev
+    image: alpine/k8s:1.37.1
+    depends_on: [build-api, build-ui]
+    when:
+      - event: push
+        branch: main
+    backend_options:
+      kubernetes:
+        serviceAccountName: [[ project_slug ]]-deployer
+    environment:
+      REGISTRY: [[ registry ]]
+      NAMESPACE: [[ dev_namespace ]]
+    commands:
+      - |
+        set -eu
+        TAG="$${CI_COMMIT_SHA}"
+        OUT=$(mktemp -d)
+        for f in api.yaml ui.yaml ingress.yaml; do
+          sed "s#:set-by-pipeline#:$${TAG}#" "deploy/dev/$${f}" > "$${OUT}/$${f}"
+        done
+        # The render must have hit both images and left no placeholder.
+        grep -q "image: $${REGISTRY}/[[ project_slug ]]-api:$${TAG}" "$${OUT}/api.yaml"
+        grep -q "image: $${REGISTRY}/[[ project_slug ]]-ui:$${TAG}" "$${OUT}/ui.yaml"
+        if grep -q set-by-pipeline "$${OUT}"/*.yaml; then
+          echo "render: a set-by-pipeline placeholder survived" >&2
+          exit 1
+        fi
+        kubectl -n "$${NAMESPACE}" apply -f "$${OUT}/api.yaml" -f "$${OUT}/ui.yaml" -f "$${OUT}/ingress.yaml"
+        kubectl -n "$${NAMESPACE}" rollout status deployment/[[ project_slug ]]-api --timeout=180s
+        kubectl -n "$${NAMESPACE}" rollout status deployment/[[ project_slug ]]-ui --timeout=180s
+        # IMM-2038: the rollout only counts as a success once the new images
+        # answer with 200; anything else exits the step non-zero.
+        for URL in "http://[[ project_slug ]]-api.$${NAMESPACE}.svc.cluster.local/health" "http://[[ project_slug ]]-ui.$${NAMESPACE}.svc.cluster.local/"; do
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --retry 5 --retry-delay 2 --retry-all-errors "$${URL}" || true)
+          if [ "$${CODE}" != "200" ]; then
+            echo "smoke: GET $${URL} returned $${CODE:-nothing}, want 200" >&2
+            exit 1
+          fi
+          echo "smoke: GET $${URL} returned 200"
+        done
+        echo "Deployed $${TAG}"

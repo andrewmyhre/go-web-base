@@ -1,0 +1,62 @@
+# Dev Postgres for [[ project_slug ]]. Unlike deploy/test-services, the data lives on a
+# PersistentVolumeClaim, so Casbin policy and app data survive a pod restart.
+# ClusterIP only: nothing outside the cluster needs it.
+#
+# The container runs as the image's entrypoint, which starts as root and drops
+# to the postgres user. Forcing runAsUser here would need fsGroup to fix the
+# volume's ownership, and the local-path provisioner's hostPath volumes ignore
+# fsGroup, so initdb would fail on a root-owned directory.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: [[ dev_namespace ]]
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: fast
+  resources:
+    requests: { storage: 5Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  replicas: 1
+  # Recreate: two pods must never share one data directory.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18.6-alpine
+          env:
+            - { name: POSTGRES_USER, value: [[ ident ]] }
+            - { name: POSTGRES_DB, value: [[ ident ]] }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-services, key: postgres-password } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "[[ ident ]]", "-d", "[[ ident ]]"] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: postgres-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: [[ dev_namespace ]]
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]

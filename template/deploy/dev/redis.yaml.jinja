@@ -1,0 +1,38 @@
+# Dev Redis for [[ project_slug ]] sessions. No persistence on purpose: a restart logs
+# everyone out of dev, which is acceptable. ClusterIP only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: [[ dev_namespace ]]
+  labels: { app.kubernetes.io/part-of: [[ project_slug ]] }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.10-alpine
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-services, key: redis-password } }
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            exec: { command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: [[ dev_namespace ]]
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]

@@ -1,0 +1,196 @@
+package [[ ident ]]
+
+import (
+	"os"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"go.yaml.in/yaml/v3"
+)
+
+// appManifests is every file deploy-dev applies, and the only ones it may:
+// the namespace, RBAC, data stores and sealed secrets stay one-time admin
+// applies (deploy/dev/README.md).
+var appManifests = []string{"api.yaml", "ui.yaml", "ingress.yaml"}
+
+// TestDeployDevAppliesOnlyTheAppManifests pins the apply: deploy-dev renders
+// exactly the app manifests and applies exactly those rendered copies, never
+// deploy/dev itself (which would apply the placeholder tag, the RBAC and the
+// secrets) and never `set image` alone, which would leave env and spec
+// changes off the cluster.
+func TestDeployDevAppliesOnlyTheAppManifests(t *testing.T) {
+	cmds := strings.Join(pipelineStepNamed(t, "deploy-dev").Commands, "\n")
+
+	if !strings.Contains(cmds, "for f in "+strings.Join(appManifests, " ")+"; do") {
+		t.Errorf("deploy-dev does not render exactly %v", appManifests)
+	}
+	var applies []string
+	for _, line := range strings.Split(cmds, "\n") {
+		if strings.Contains(line, "kubectl") && strings.Contains(line, " apply ") {
+			applies = append(applies, strings.TrimSpace(line))
+		}
+	}
+	want := `kubectl -n "$${NAMESPACE}" apply -f "$${OUT}/api.yaml" -f "$${OUT}/ui.yaml" -f "$${OUT}/ingress.yaml"`
+	if len(applies) != 1 || applies[0] != want {
+		t.Errorf("deploy-dev apply lines = %q, want exactly [%q]", applies, want)
+	}
+	for _, never := range []string{"set image", "rbac", "namespace.yaml", "sealed", "postgres.yaml", "redis.yaml"} {
+		if strings.Contains(cmds, never) {
+			t.Errorf("deploy-dev commands contain %q", never)
+		}
+	}
+}
+
+// TestDevAppManifestsCarryThePlaceholder pins the other side of the render:
+// each Deployment deploy-dev applies names its image, once, with the
+// set-by-pipeline placeholder the sed replaces. Without it the render would
+// be a no-op and the step's own grep would fail every deploy.
+func TestDevAppManifestsCarryThePlaceholder(t *testing.T) {
+	for file, image := range map[string]string{
+		"api.yaml": "image: [[ registry ]]/[[ project_slug ]]-api:set-by-pipeline",
+		"ui.yaml":  "image: [[ registry ]]/[[ project_slug ]]-ui:set-by-pipeline",
+	} {
+		data, err := os.ReadFile("deploy/dev/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(data), image); n != 1 {
+			t.Errorf("deploy/dev/%s holds %q %d times, want 1", file, image, n)
+		}
+	}
+}
+
+// TestUIStep pins the UI check that runs on every pull request: install
+// from the lockfile, fail if the committed client differs from a fresh
+// generation, then test, type check and build. It has no `when:` of its own,
+// so it runs whenever the workflow does.
+func TestUIStep(t *testing.T) {
+	step := pipelineStepNamed(t, "ui")
+	if len(step.When) != 0 {
+		t.Errorf("ui when = %v, want none (run on pull requests too)", step.When)
+	}
+	want := []string{
+		"cd ui",
+		"corepack enable",
+		"pnpm install --frozen-lockfile",
+		"pnpm run check:client",
+		"pnpm test",
+		"pnpm check",
+		"pnpm build",
+	}
+	if !reflect.DeepEqual(step.Commands, want) {
+		t.Errorf("ui commands = %q, want %q", step.Commands, want)
+	}
+}
+
+// TestBuildUIStep pins the UI image build the way TestBuildAPIStep pins the
+// API's: main only, after every check including ui, and pushed with the
+// commit's tag from deploy/ui.Dockerfile.
+func TestBuildUIStep(t *testing.T) {
+	step := pipelineStepNamed(t, "build-ui")
+
+	want := []map[string]string{{"event": "push", "branch": "main"}}
+	if !reflect.DeepEqual(step.When, want) {
+		t.Errorf("build-ui when = %v, want exactly %v (push to main only)", step.When, want)
+	}
+	for _, d := range []string{"test", "lint", "ui"} {
+		if !slices.Contains(step.DependsOn, d) {
+			t.Errorf("build-ui depends_on = %v, missing %q", step.DependsOn, d)
+		}
+	}
+	if got := step.Environment["REGISTRY"]; got != "[[ registry ]]" {
+		t.Errorf("build-ui REGISTRY = %q, want [[ registry ]]", got)
+	}
+	cmds := strings.Join(step.Commands, "\n")
+	for _, w := range []string{
+		"/[[ project_slug ]]-ui:$${CI_COMMIT_SHA}",
+		"push=true",
+		"filename=ui.Dockerfile",
+	} {
+		if !strings.Contains(cmds, w) {
+			t.Errorf("build-ui commands are missing %q", w)
+		}
+	}
+}
+
+// rbacRule is one rule of a Role.
+type rbacRule struct {
+	APIGroups     []string `yaml:"apiGroups"`
+	Resources     []string `yaml:"resources"`
+	ResourceNames []string `yaml:"resourceNames"`
+	Verbs         []string `yaml:"verbs"`
+}
+
+// TestDeployerRole pins deploy/dev/rbac.yaml's Role to exactly what
+// deploy-dev needs: read and create on Deployments, Services and Ingresses,
+// patch only on the named app objects (create cannot take resourceNames),
+// read on ReplicaSets and Pods, and nothing else (no Secrets, PVCs, Roles,
+// RoleBindings or Namespaces, no delete, no wildcard).
+func TestDeployerRole(t *testing.T) {
+	data, err := os.ReadFile("deploy/dev/rbac.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rules []rbacRule
+	roles := 0
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		var doc struct {
+			Kind  string     `yaml:"kind"`
+			Rules []rbacRule `yaml:"rules"`
+		}
+		if err := dec.Decode(&doc); err != nil {
+			break
+		}
+		if doc.Kind == "Role" {
+			roles++
+			rules = doc.Rules
+		}
+	}
+	if roles != 1 {
+		t.Fatalf("deploy/dev/rbac.yaml has %d Roles, want 1", roles)
+	}
+
+	// group/resource -> verb -> names ("" for any name).
+	got := map[string]map[string][]string{}
+	for _, r := range rules {
+		for _, g := range r.APIGroups {
+			for _, res := range r.Resources {
+				k := g + "/" + res
+				if got[k] == nil {
+					got[k] = map[string][]string{}
+				}
+				for _, v := range r.Verbs {
+					if len(r.ResourceNames) == 0 {
+						got[k][v] = append(got[k][v], "")
+					} else {
+						got[k][v] = append(got[k][v], r.ResourceNames...)
+					}
+				}
+			}
+		}
+	}
+	read := []string{"get", "list", "watch"}
+	want := map[string]map[string][]string{}
+	for k, patch := range map[string][]string{
+		"apps/deployments":            {"[[ project_slug ]]-api", "[[ project_slug ]]-ui"},
+		"/services":                   {"[[ project_slug ]]-api", "[[ project_slug ]]-ui"},
+		"networking.k8s.io/ingresses": {"[[ project_slug ]]"},
+	} {
+		want[k] = map[string][]string{"create": {""}, "patch": patch}
+		for _, v := range read {
+			want[k][v] = []string{""}
+		}
+	}
+	for _, k := range []string{"apps/replicasets", "/pods"} {
+		want[k] = map[string][]string{}
+		for _, v := range read {
+			want[k][v] = []string{""}
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("deployer Role grants\n  %v\nwant exactly\n  %v", got, want)
+	}
+}

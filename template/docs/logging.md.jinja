@@ -1,0 +1,111 @@
+# Logging
+
+Every log line `[[ project_slug ]]` emits follows one schema, so Loki can filter to
+exactly one provider, agent, session, content kind, queue, request or RBAC
+decision.
+
+## How it works
+
+- Logs go to stderr as zap JSON. The cluster's Fluent Bit already ships them
+  to Loki and parses the JSON fields (`Merge_Log On`), so no shipping
+  configuration is needed.
+- The helpers live in the `logging` package and emit each scope's fixed
+  fields; call sites never type field names.
+- Every line carries the low-cardinality `scope` and the `service`
+  (`[[ project_slug ]]`).
+- Field values are JSON fields, never Loki labels: session and agent ids are
+  high-cardinality and must stay filterable as line fields.
+
+## The schema
+
+| `scope` | fields |
+| -- | -- |
+| `api` | `request_id`, `method`, `path`, `route`, `permission`, `status`, `user_sub`, `client_ip`, `duration_ms` |
+| `rbac` | `subject`, `domain`, `object`, `action`, `decision` (`allow` or `deny`), `request_id` |
+| `queue` | `queue`, `job_id`, `attempt`, `outcome` |
+| `agent` | `provider`, `agent_id`, `session_id`, `kind` (`thought`, `tool_use`, `tool_result`, `message`, `prompt`, `question`), `content` |
+
+- `api` is the access log: one line per request. The `request_id` is
+  generated per request and returned to the caller in the `X-Request-Id`
+  response header; `rbac` lines of the same request carry the same id, so
+  the two pair in Loki. `path` is the request as sent and `route` the
+  matched pattern, which is empty for a 404, so `path` is what an unmatched
+  request has to go on. `client_ip` is the connection's peer; proxy headers
+  are never trusted.
+- `rbac` is one line per check of a route that is not public, allow or
+  deny. `subject` is the Google account ID, and empty for a request with no
+  session (answered 401). `domain` is `global` until routes are
+  project-scoped. A route that needs only a signed-in user, such as `/me`,
+  logs `object` `authenticated` and an empty `action`; any other route logs
+  its permission's resource and verb, such as `Projects` and `Read`. `api`
+  lines carry the signed-in user's `user_sub`.
+- `queue` and `agent` helpers are defined and redacting; later phases fill
+  them in against this contract rather than inventing one.
+- `decision` is `allow` or `deny`, and `kind` is one of the six values
+  above.
+
+## Redaction
+
+The `logging` helpers redact known secret values before a line is written,
+because docs/roles.md says no role can read them and agent prompts and tool
+results are where they would leak. Each secret value the logger is
+configured with is replaced in an agent line's `content` with the literal
+marker `[REDACTED]`. Redaction covers only values the logger knows, and only
+`content`: other fields hold ids and names, not free text.
+
+## LogQL
+
+Every query selects the API's streams, parses the JSON line and then filters
+on the scope's fields. Fluent Bit names its stream labels after the
+Kubernetes metadata, so the namespace label is `kubernetes_namespace_name`
+(not `namespace`), and pod labels appear with `.`, `/` and `-` turned into
+`_`. `app_kubernetes_io_part_of="[[ project_slug ]]"` keeps out the Postgres and Redis
+pods that share the namespace. The examples use dev (`[[ dev_namespace ]]`):
+
+```logql
+# api: failing requests, and requests that matched no route
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="api" | status="500"
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="api" | status="404"
+
+# one request end to end: its api line and its rbac lines (no scope filter)
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | request_id="0123456789abcdef"
+
+# rbac: who was refused, on what
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="rbac" | decision="deny"
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="rbac" | decision="deny" | object="42"
+
+# queue: failing work, by queue
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="queue" | outcome="failed"
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="queue" | queue="workflow-runs" | attempt="3"
+
+# agent: one provider's tool results, one session's prompts, a word in content
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="agent" | provider="openai" | kind="tool_result"
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="agent" | session_id="session-1" | kind="prompt"
+{kubernetes_namespace_name="[[ dev_namespace ]]", app_kubernetes_io_part_of="[[ project_slug ]]"} | json | scope="agent" | content=~"(?i).*migration.*"
+```
+
+## Dashboard
+
+`deploy/grafana/[[ project_slug ]]-logs.json` is a Grafana dashboard over these
+queries: line volume by scope, API requests by status, every matching line,
+and one panel each for API 5xx and 404, RBAC denies, failed queue jobs and
+agent lines. Its dropdowns are `namespace` plus the six contract fields
+`scope`, `provider`, `agent_id`, `session_id`, `kind` and `request_id`, and
+every panel applies all six, so setting `request_id` follows one request
+through its api and rbac lines.
+
+- `namespace` lists real values, because it is a Loki label. The six fields
+  are JSON fields, and Grafana's Loki variables can only list label values,
+  so their dropdowns offer the contract's fixed values (`scope`, `kind`) or
+  only `All`, and take a typed value (for an id, paste it from a line or
+  from the `X-Request-Id` header).
+- The Grafana sidecar in `monitoring` loads any ConfigMap labelled
+  `grafana_dashboard: "1"`. `deploy/grafana/kustomization.yaml` generates
+  that ConfigMap from the JSON file, so the JSON is the only copy:
+
+  ```sh
+  kubectl apply -k deploy/grafana
+  ```
+
+- `deploy/grafana/dashboard_test.go` pins the six variables to the
+  `logging` package's scopes and kinds, and checks every panel applies them.

@@ -1,0 +1,218 @@
+:root {
+	color-scheme: light dark;
+	font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+}
+
+.shell {
+	display: grid;
+	grid-template-columns: 200px 1fr;
+	min-height: 100vh;
+}
+
+.menu {
+	border-right: 1px solid rgba(127, 127, 127, 0.25);
+	padding: 1rem;
+}
+
+.menu ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.menu a {
+	display: block;
+	padding: 0.35rem 0.5rem;
+	border-radius: 6px;
+	text-decoration: none;
+	color: inherit;
+}
+
+.menu a:hover {
+	background: rgba(127, 127, 127, 0.15);
+}
+
+.content {
+	padding: 1.5rem 2rem;
+}
+
+.user {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+}
+
+.avatar {
+	width: 48px;
+	height: 48px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.avatar.placeholder {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: #4b6ef5;
+	color: #fff;
+	font-weight: 600;
+}
+
+.button {
+	display: inline-block;
+	padding: 0.5rem 1rem;
+	border: 1px solid rgba(127, 127, 127, 0.4);
+	border-radius: 8px;
+	background: none;
+	color: inherit;
+	text-decoration: none;
+	cursor: pointer;
+	font: inherit;
+}
+
+.button:hover {
+	background: rgba(127, 127, 127, 0.15);
+}
+
+.menu a[aria-current='page'] {
+	font-weight: 600;
+}
+
+.name {
+	margin: 0;
+	font-weight: 600;
+}
+
+main {
+	display: grid;
+	gap: 1rem;
+	justify-items: start;
+}
+
+/* Phone width: the menu becomes a bar across the top. */
+@media (max-width: 640px) {
+	.shell {
+		grid-template-columns: 1fr;
+		grid-template-rows: auto 1fr;
+	}
+
+	.menu {
+		border-right: none;
+		border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+		padding: 0.5rem 1rem;
+	}
+
+	.menu ul {
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	.content {
+		padding: 1rem;
+	}
+}
+
+.topbar {
+	display: flex;
+	justify-content: flex-end;
+	margin-bottom: 1rem;
+}
+
+.account-menu {
+	position: relative;
+}
+
+.avatar-button {
+	display: inline-flex;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: none;
+	cursor: pointer;
+	min-width: 44px;
+	min-height: 44px;
+	align-items: center;
+	justify-content: center;
+}
+
+.avatar-button:focus-visible,
+.account-menu-items button:focus-visible,
+.account-modal .button:focus-visible {
+	outline: 2px solid #4b6ef5;
+	outline-offset: 2px;
+}
+
+.account-menu-items {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 0.25rem);
+	z-index: 10;
+	list-style: none;
+	margin: 0;
+	padding: 0.25rem;
+	min-width: 10rem;
+	border: 1px solid rgba(127, 127, 127, 0.4);
+	border-radius: 8px;
+	background: Canvas;
+	color: CanvasText;
+}
+
+.account-menu-items button {
+	display: block;
+	width: 100%;
+	min-height: 44px;
+	padding: 0.5rem 0.75rem;
+	border: none;
+	border-radius: 6px;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.account-menu-items button:hover {
+	background: rgba(127, 127, 127, 0.15);
+}
+
+.account-modal {
+	width: min(24rem, calc(100vw - 2rem));
+	border: 1px solid rgba(127, 127, 127, 0.4);
+	border-radius: 12px;
+	padding: 1.25rem;
+	background: Canvas;
+	color: CanvasText;
+}
+
+.account-modal::backdrop {
+	background: rgba(0, 0, 0, 0.4);
+}
+
+.account-modal h2 {
+	margin-top: 0;
+}
+
+.account-identity {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+}
+
+.email {
+	margin: 0.25rem 0 0;
+	opacity: 0.8;
+}
+
+.roles {
+	margin: 0 0 1rem;
+	padding-left: 1.25rem;
+}

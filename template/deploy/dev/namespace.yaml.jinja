@@ -1,0 +1,8 @@
+# The [[ project_slug ]] dev environment (IMM-2037), served at
+# [[ dev_host ]]. Applied once by hand; see README.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: [[ dev_namespace ]]
+  labels:
+    app.kubernetes.io/part-of: [[ project_slug ]]

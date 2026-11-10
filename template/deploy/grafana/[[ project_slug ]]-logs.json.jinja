@@ -1,0 +1,553 @@
+{
+  "uid": "[[ project_slug ]]-logs",
+  "title": "[[ project_slug ]] logs",
+  "description": "The [[ project_slug ]] logging contract (docs/logging.md) over Loki. Source: [[ github_repo ]] deploy/grafana/[[ project_slug ]]-logs.json.",
+  "tags": [
+    "[[ project_slug ]]",
+    "logs"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 41,
+  "version": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "Loki",
+        "query": "loki",
+        "regex": "",
+        "current": {
+          "text": "Loki",
+          "value": "P8E80F9AEF21F6940"
+        },
+        "hide": 0
+      },
+      {
+        "type": "query",
+        "name": "namespace",
+        "label": "Namespace",
+        "datasource": {
+          "type": "loki",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "type": 1,
+          "label": "kubernetes_namespace_name",
+          "stream": "{app_kubernetes_io_part_of=\"[[ project_slug ]]\"}",
+          "refId": "LokiVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values({app_kubernetes_io_part_of=\"[[ project_slug ]]\"},kubernetes_namespace_name)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "[[ dev_namespace ]]",
+          "value": "[[ dev_namespace ]]"
+        },
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "scope",
+        "label": "scope",
+        "description": "The contract's four scopes (docs/logging.md).",
+        "query": "api,rbac,queue,agent",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "api",
+            "value": "api",
+            "selected": false
+          },
+          {
+            "text": "rbac",
+            "value": "rbac",
+            "selected": false
+          },
+          {
+            "text": "queue",
+            "value": "queue",
+            "selected": false
+          },
+          {
+            "text": "agent",
+            "value": "agent",
+            "selected": false
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "provider",
+        "label": "provider",
+        "description": "Agent lines only. A JSON field, not a Loki label, so Grafana cannot list its values: pick All or type a provider name.",
+        "query": "",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "agent_id",
+        "label": "agent_id",
+        "description": "Agent lines only. A JSON field, not a Loki label, so Grafana cannot list its values: pick All or type an id.",
+        "query": "",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "session_id",
+        "label": "session_id",
+        "description": "Agent lines only. A JSON field, not a Loki label, so Grafana cannot list its values: pick All or type an id.",
+        "query": "",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "kind",
+        "label": "kind",
+        "description": "Agent content kind: the six values of the contract.",
+        "query": "thought,tool_use,tool_result,message,prompt,question",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "thought",
+            "value": "thought",
+            "selected": false
+          },
+          {
+            "text": "tool_use",
+            "value": "tool_use",
+            "selected": false
+          },
+          {
+            "text": "tool_result",
+            "value": "tool_result",
+            "selected": false
+          },
+          {
+            "text": "message",
+            "value": "message",
+            "selected": false
+          },
+          {
+            "text": "prompt",
+            "value": "prompt",
+            "selected": false
+          },
+          {
+            "text": "question",
+            "value": "question",
+            "selected": false
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "request_id",
+        "label": "request_id",
+        "description": "Pairs an api line with its rbac lines. A JSON field, not a Loki label, so Grafana cannot list its values: pick All or type an id. It is the X-Request-Id response header.",
+        "query": "",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Lines by scope",
+      "description": "Every [[ project_slug ]] line matching the filters, counted per scope.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (scope) (count_over_time({kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{scope}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 80
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "API requests by status",
+      "description": "The access log (one api line per request), counted per HTTP status.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (status) (count_over_time({kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" | scope=\"api\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 80
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "All lines",
+      "description": "Every line matching the filters. Set request_id to follow one request: its api line and its rbac lines.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 4,
+      "title": "API: 5xx and 404",
+      "description": "Failing requests, and requests that matched no route (route is empty, so read path).",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" | scope=\"api\" | status=~\"5..|404\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 5,
+      "title": "RBAC: denies",
+      "description": "Who was refused, on what. Empty until something calls Authorize (IMM-2033).",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" | scope=\"rbac\" | decision=\"deny\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Queue: failed jobs",
+      "description": "Failing work by queue. Empty until a queue producer exists.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" | scope=\"queue\" | outcome=\"failed\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Agent lines",
+      "description": "Agent content by provider, agent, session and kind. Empty until an agent producer exists.",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{kubernetes_namespace_name=\"$namespace\", app_kubernetes_io_part_of=\"[[ project_slug ]]\"} | json | service=\"[[ project_slug ]]\" | scope=~\"$scope\" | provider=~\"$provider\" | agent_id=~\"$agent_id\" | session_id=~\"$session_id\" | kind=~\"$kind\" | request_id=~\"$request_id\" | scope=\"agent\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}

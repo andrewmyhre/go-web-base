@@ -1,0 +1,73 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/svelte';
+
+const api = vi.hoisted(() => ({ getMe: vi.fn(), signOut: vi.fn() }));
+vi.mock('$lib/api', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api')>()),
+	getMe: api.getMe,
+	signOut: api.signOut
+}));
+
+import Page from './+page.svelte';
+
+const andrew = {
+	id: '104242424242424242424',
+	name: 'Andrew Myhre',
+	email: 'andrew@example.com',
+	avatar: 'https://lh3.googleusercontent.com/a/andrew',
+	roles: [{ role: 'Admin', domain: 'global' }]
+};
+
+beforeEach(() => {
+	api.getMe.mockReset();
+	api.signOut.mockReset();
+});
+
+describe('home page', () => {
+	it('signed out: offers a full-page sign-in link to /auth/google', async () => {
+		api.getMe.mockResolvedValue(null);
+		render(Page);
+		const link = await screen.findByRole('link', { name: 'Sign in with Google' });
+		expect(link.getAttribute('href')).toBe('/auth/google');
+		// Without this the SvelteKit router would try to render /auth/google
+		// itself and never reach the API.
+		expect(link.hasAttribute('data-sveltekit-reload')).toBe(true);
+	});
+
+	it('signed in: shows the avatar and name from /me', async () => {
+		api.getMe.mockResolvedValue(andrew);
+		const { container } = render(Page);
+		expect(await screen.findByRole('button', { name: 'Account menu for Andrew Myhre' })).toBeTruthy();
+		expect(container.querySelector('.user .name')?.textContent).toBe('Andrew Myhre');
+		expect(container.querySelector('.user img.avatar')?.getAttribute('src')).toBe(andrew.avatar);
+		expect(screen.queryByRole('link', { name: 'Sign in with Google' })).toBeNull();
+	});
+
+	it('signing out from the avatar menu returns to the sign-in page', async () => {
+		api.getMe.mockResolvedValue(andrew);
+		api.signOut.mockResolvedValue(undefined);
+		render(Page);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Account menu for Andrew Myhre' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+		expect(api.signOut).toHaveBeenCalledTimes(1);
+		expect(await screen.findByRole('link', { name: 'Sign in with Google' })).toBeTruthy();
+		expect(screen.queryByRole('button', { name: /Account menu/ })).toBeNull();
+	});
+
+	it('a failed sign out is an error, not a signed-out page', async () => {
+		api.getMe.mockResolvedValue(andrew);
+		api.signOut.mockRejectedValue(new Error('503'));
+		render(Page);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Account menu for Andrew Myhre' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+		expect((await screen.findByRole('alert')).textContent).toContain('Could not reach [[ project_name ]]');
+		expect(screen.queryByRole('link', { name: 'Sign in with Google' })).toBeNull();
+	});
+
+	it('an API failure is an error, not a signed-out page', async () => {
+		api.getMe.mockRejectedValue(new Error('503'));
+		render(Page);
+		expect((await screen.findByRole('alert')).textContent).toContain('Could not reach [[ project_name ]]');
+		expect(screen.queryByRole('link', { name: 'Sign in with Google' })).toBeNull();
+	});
+});
