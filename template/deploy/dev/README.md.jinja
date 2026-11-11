@@ -28,9 +28,8 @@ admin applies it by hand.
 
 ## One-time setup
 
-Run from this directory with an admin kubeconfig. Steps 1 and 2 are never
-applied by CI; step 3's app manifests are, on every push to `main`, after this
-first apply.
+Run from this directory with an admin kubeconfig. CI never applies steps 1
+to 3; it applies the app manifests on every push to `main`.
 
 1. Create the namespace and the deployer identity:
 
@@ -75,25 +74,28 @@ first apply.
    Add a header comment to each sealed file recording the date and that the
    controller unsealed it, then commit them.
 
-3. Start the data stores, then the app manifests rendered the way
-   `deploy-dev` renders them, so the placeholder tag `set-by-pipeline` is
-   never applied:
+3. Start the data stores:
 
    ```sh
    kubectl apply -f postgres.yaml -f redis.yaml
+   kubectl -n [[ dev_namespace ]] rollout status deployment/postgres --timeout=120s
+   ```
+
+   The app manifests need no hand apply. Once the repository is enabled in
+   Woodpecker, the first push to `main` builds both images, and `deploy-dev`
+   creates the API, UI and Ingress (the deployer Role allows `create`) and
+   waits for both rollouts. To apply them by hand instead, render them the
+   way `deploy-dev` does, so the placeholder tag `set-by-pipeline` is never
+   applied, and only for a commit whose `build-api` and `build-ui` ran:
+
+   ```sh
    SHA=$(git rev-parse origin/main)
    OUT=$(mktemp -d)
    for f in api.yaml ui.yaml ingress.yaml; do
      sed "s#:set-by-pipeline#:$SHA#" "$f" > "$OUT/$f"
    done
    kubectl -n [[ dev_namespace ]] apply -f "$OUT/api.yaml" -f "$OUT/ui.yaml" -f "$OUT/ingress.yaml"
-   kubectl -n [[ dev_namespace ]] rollout status deployment/[[ project_slug ]]-api --timeout=180s
-   kubectl -n [[ dev_namespace ]] rollout status deployment/[[ project_slug ]]-ui --timeout=180s
    ```
-
-   Both images exist only if `build-api` and `build-ui` ran for that commit.
-   Until a `main` build of the UI exists, skip `ui.yaml` and `ingress.yaml`
-   and let the first merge apply them.
 
 4. Check the deployer can do what `deploy-dev` does, and no more:
 

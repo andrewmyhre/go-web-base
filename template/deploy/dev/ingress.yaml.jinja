@@ -25,4 +25,6 @@ spec:
           - { path: /me, pathType: Prefix, backend: { service: { name: [[ project_slug ]]-api, port: { name: http } } } }
           - { path: /health, pathType: Exact, backend: { service: { name: [[ project_slug ]]-api, port: { name: http } } } }
           - { path: /openapi.json, pathType: Exact, backend: { service: { name: [[ project_slug ]]-api, port: { name: http } } } }
-          - { path: /, pathType: Prefix, backend: { service: { name: [[ project_slug ]]-ui, port: { name: http } } } }
+[[% if feature_example %]]          # The example feature's routes (GET /example/hello).
+          - { path: /example, pathType: Prefix, backend: { service: { name: [[ project_slug ]]-api, port: { name: http } } } }
+[[% endif %]]          - { path: /, pathType: Prefix, backend: { service: { name: [[ project_slug ]]-ui, port: { name: http } } } }

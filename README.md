@@ -94,9 +94,9 @@ Nothing in a generated project works on the cluster until these are done.
 Each one needs a human or an admin kubeconfig. `<slug>`, `<prefix>` and so on
 are your answers.
 
-1. **GitHub and Woodpecker.** Create the repo, push the generated project,
-   and enable it in Woodpecker. Mark it trusted: `deploy-dev` sets
-   `backend_options`.
+1. **GitHub.** Create the repo and push the generated project. Leave
+   Woodpecker for step 5: a push to `main` deploys, and that needs the
+   namespace, secrets and data stores from steps 3 and 4.
 2. **Google OAuth Web client.**
    - Authorized origin: `https://<dev_host>`.
    - Redirect URI: `https://<dev_host>/auth/google/callback`.
@@ -112,10 +112,14 @@ are your answers.
 
    The template never ships a SealedSecret: each is encrypted for one cluster
    and namespace.
-4. **One-time applies** from `deploy/dev`: the
-   namespace, `rbac.yaml`, Postgres and Redis, then the first app rollout
-   (`deploy/dev/README.md`, step 3).
-5. **Cloudflare route, DNS and Access app.** Needs Andrew's yes. The default
+4. **One-time applies** from `deploy/dev`: the namespace, `rbac.yaml`,
+   Postgres and Redis (`deploy/dev/README.md`, steps 1 to 4).
+5. **Woodpecker.** Enable the repo (a new repo shows up after "Reload
+   repositories" on the add-repository page) and mark it trusted:
+   `deploy-dev` sets `backend_options`. Then push to `main`, an empty commit
+   if need be: the first pipeline builds both images and `deploy-dev` creates
+   the API, UI and Ingress.
+6. **Cloudflare route, DNS and Access app.** Needs Andrew's yes. The default
    zone is `immutablesoftware.dev`:
 
    ```sh
@@ -123,7 +127,7 @@ are your answers.
      add-service "<project_name> Dev" <dev_subdomain>
    ```
 
-6. **The admin.** Set `<prefix>_ADMIN_SUB` in `deploy/dev/api.yaml` to the
+7. **The admin.** Set `<prefix>_ADMIN_SUB` in `deploy/dev/api.yaml` to the
    owner's Google sub (digits, never an email). If you left `admin_sub` empty,
    nobody can sign in yet, so `/me` cannot tell you. Sign in once anyway: the
    refusal logs an `rbac` deny line whose `subject` is the sub.
@@ -132,7 +136,7 @@ are your answers.
    kubectl -n <dev_namespace> logs deploy/<slug>-api | grep '"decision":"deny"'
    ```
 
-7. **Dependabot.** The generated `.github/dependabot.yml` opens weekly,
+8. **Dependabot.** The generated `.github/dependabot.yml` opens weekly,
    grouped PRs for Go modules once it is on the repo's default branch. No
    setting is needed for these version updates; optionally enable Dependabot
    alerts and security updates under Settings, Code security. It does not
