@@ -9,3 +9,5 @@
 - [docs/logging.md](docs/logging.md): The logging fields per scope (the contract is core's), LogQL for Loki, and the Grafana dashboard in `deploy/grafana`.
 - [deploy/dev/README.md](deploy/dev/README.md): The dev environment at [[ dev_host ]] (namespace [[ dev_namespace ]]) - manifests, one-time setup, the deploy-dev rollout and the deployer ServiceAccount tradeoff.
 - [ui/README.md](ui/README.md): The SvelteKit PWA - same-origin routing, how the API client is generated from ui/openapi.json and the two drift checks, the service worker rule, local development and the image.
+[[% if feature_example %]]- [features/example](https://github.com/andrewmyhre/go-web-base/tree/main/features/example): The example feature module installed in `cmd/[[ project_slug ]]/main.go`: `GET /example/hello`, the `ExampleGreetings` resource granted to `Contributor`, and `[[ env_prefix ]]_EXAMPLE_GREETING`.
+[[% endif %]]

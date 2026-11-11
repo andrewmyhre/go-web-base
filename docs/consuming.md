@@ -93,21 +93,51 @@ new version of `core` changes how `main.go` must call it.
 
 ## Enabling a feature
 
-**Planned: IMM-2075.** Each optional feature is a boolean Copier question. To
-turn one on in an existing project:
+**Available now.** Each optional feature is a boolean Copier question named
+`feature_<name>`, default `false`. The only one today is `feature_example`
+(the [example feature](../features/example/README.md)). A new project answers
+it in `copier copy` (`-d feature_example=true`). To turn it on in an existing
+project, from a clean working tree:
 
 ```sh
-uvx copier@9.19.1 update -d agent_client=true
+uvx copier@9.19.1 update -d feature_example=true
 ```
 
-That renders only the glue: the import and `Install` call in `main.go`, the
-feature's config and env vars in `deploy/dev/api.yaml`, and any UI wiring. The
-feature's code arrives as its module and package. A new project can answer
-the question in `copier copy`.
+That renders only the glue, and nothing else changes:
 
-To turn a feature off, run the same update with `=false`, which should remove
-the glue; IMM-2075 verifies that. The feature's database tables are not
-dropped, so remove them with a migration of your own if you need to.
+- `cmd/<slug>/main.go`: the import and `Features: []app.Feature{example.New("Contributor")}`.
+  The feature is granted to `Contributor`, so every role that inherits it
+  (`Project Manager`, `Manager`, `Admin`) can call `GET /example/hello`. Change
+  the role name in `main.go` if your role graph differs.
+- `go.mod`: a `require` of `github.com/andrewmyhre/go-web-base/features/example`
+  at the template's release version (run `go mod tidy` once after the update to
+  fetch it and record `go.sum`).
+- `deploy/dev/api.yaml`: a commented `<PREFIX>_EXAMPLE_GREETING` entry.
+- `README.md` and `llms.txt`: a line each.
+- `ui/openapi.json` and `ui/src/lib/api/openapi.d.ts`: the route and its
+  response schema, so the OpenAPI drift test and `check:client` pass with the
+  feature on. Both files are templates with the feature's sections wrapped in
+  conditions, so a project's own routes sit outside them and merge cleanly.
+  Only the sections for features you enabled are rendered. If you add your own
+  routes, regenerate both with `pnpm run generate` as usual, and the feature's
+  routes stay in the output.
+
+The feature's code arrives as its module, not as files in your repo.
+
+To turn it off, run the same update with `=false`. Verified on a scratch
+project (render with the feature off, commit, update to on, commit, update to
+off): the update to `true` adds exactly the glue above, and the update back to
+`false` returns every file to its pre-feature content, byte for byte, with no
+conflicts. The feature's database tables are not dropped, so remove them with
+a migration of your own if you need to.
+
+Copier does a three-way merge, so an edit of yours that touches lines next to
+the glue can conflict. A project edit on a line beside `Features:` in `main.go`
+or beside the end of the `env:` list in `deploy/dev/api.yaml` produced ordinary
+conflict markers on both updates, which you resolve by hand. Edits elsewhere in
+the same files (a version bump, an env var added before `ADMIN_SUB`) merged
+without conflict. If you have added a second entry to `Features` yourself,
+expect to resolve that line when you turn the example off.
 
 Enable a feature only where the project needs it. Each one adds routes,
 permissions and config that must be set up and secured.
@@ -185,19 +215,22 @@ the feature reads them.
 [features/example](../features/example/README.md) uses every hook and has its
 own end to end test. Copy it to start a feature. A project installs one by
 importing the module and listing it in `Features` in `main.go`; the Copier
-question that renders that glue is planned (IMM-2075). Its migrations run
+question that renders that glue is described in
+[Enabling a feature](#enabling-a-feature). Its migrations run
 after core's and in the order the features are listed, before the project's own.
 
 If it has UI, it ships a matching npm package (planned). Feature modules are
-versioned independently of `core`. Each one states the range of `core`
-versions it supports; the example requires `core v0.2.0` and, in this
-repository, builds against `../../core` through a `replace`.
+released in lockstep with `core` (same version number). Each one states the
+`core` it requires in its `go.mod`; the example's is updated by the release
+script, and in this repository it builds against `../../core` through a
+`replace`.
 
 ## Versions and compatibility
 
 **Planned: IMM-2070.**
 
-- Go modules are tagged per module: `core/v0.3.0`, `agent/v0.1.0`.
+- Go modules are tagged per module, all with the release's version:
+  `core/v0.3.0`, `features/example/v0.3.0`.
 - The UI package is released as the GitHub release `ui/v0.3.0` (available
   now), with the same number as core.
 - The template is tagged `v0.3.0`.

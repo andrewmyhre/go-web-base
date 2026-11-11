@@ -30,7 +30,10 @@ app.Options{
 }
 ```
 
-Then regenerate the app's `ui/openapi.json`, since the route is in the document.
+A project generated from the go-web-base template gets this wiring by answering
+`feature_example=true` (see [docs/consuming.md](../../docs/consuming.md#enabling-a-feature)),
+which also puts the route in its `ui/openapi.json` and `openapi.d.ts`. Done by
+hand, regenerate `ui/openapi.json`, since the route is in the document.
 Every role that inherits `Contributor` can call the route. A role the app does
 not define makes startup fail with the role named. The grant is not in the
 app's `docs/roles.md`, because it comes from the feature.

@@ -53,7 +53,10 @@ spec:
             # skips the bootstrap, and then nobody can sign in.
             - { name: [[ env_prefix ]]_ADMIN_SUB, value: "[[ admin_sub ]]" }
             - { name: [[ env_prefix ]]_GOOGLE_REDIRECT_URI, value: "https://[[ dev_host ]]/auth/google/callback" }
-          ports: [{ name: http, containerPort: 8080 }]
+[[% if feature_example %]]            # The example feature's greeting (GET /example/hello). Unset uses its
+            # default, "Hello from the example feature".
+            # - { name: [[ env_prefix ]]_EXAMPLE_GREETING, value: "Hello" }
+[[% endif %]]          ports: [{ name: http, containerPort: 8080 }]
           readinessProbe:
             httpGet: { path: /health, port: http }
             periodSeconds: 5

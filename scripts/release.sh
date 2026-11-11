@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Cut a go-web-base release: tag core, wait for the Go module proxy to serve
 # it, build and pack the UI package and attach it to a GitHub release
-# ui/vX.Y.Z, then prepare a release branch that pins the template to both and
-# records the template's go.sum and ui/pnpm-lock.yaml. After that branch
-# merges, tag the merge commit with the same version for the template.
+# ui/vX.Y.Z, then prepare a release branch that requires that core in each
+# feature module (tagging each one with the same version), pins the template
+# to core, the features and the UI package, and records the template's go.sum
+# and ui/pnpm-lock.yaml. After that branch merges, tag the merge commit with
+# the same version for the template.
 #
 #   scripts/release.sh v0.2.0
 #
@@ -78,19 +80,55 @@ fi
 # The asset has to be downloadable before the template pins it.
 curl -fsSIL -o /dev/null "$UI_URL" || { echo "$UI_URL is not downloadable" >&2; exit 1; }
 
-# 5. Release branch: pin the template to the new core and UI package, and
-# record go.sum and ui/pnpm-lock.yaml from a rendered sample. The lockfile
+# 5. Release branch: pin the features, the template and the UI package to the
+# new versions, and record go.sum and ui/pnpm-lock.yaml from a rendered sample
+# (with every feature on, so go.sum has the hashes of all of them). The lockfile
 # must be made against the real release URL: release-check-ui installs with
 # --frozen-lockfile, which fails when package.json and the lockfile disagree
 # or the tarball's integrity hash is missing.
 git switch -q -c "release/$VERSION"
+
+# --- Feature modules (lockstep versions) ------------------------------------
+# Each feature in FEATURES is released with the same version as core. A feature
+# tag has to sit on a commit whose go.mod requires this core version, and that
+# commit cannot exist before core is published, so it is made here on the
+# release branch and tagged from there. Merge the release PR with a merge
+# commit (not squash or rebase) so the tagged commit stays in main's history.
+FEATURES=(example)
+FEATURE_BASE=github.com/andrewmyhre/go-web-base/features
+for f in "${FEATURES[@]}"; do
+  sed -i -E "s#^(\s*$MODULE) v[0-9.]+#\1 $VERSION#" "features/$f/go.mod"
+  # The in-repo replace stays, so tidy needs no published core.
+  ( cd "features/$f" && go mod tidy )
+  git add "features/$f/go.mod" "features/$f/go.sum"
+  git commit -q -m "features/$f: require core $VERSION" || true
+  if git rev-parse -q --verify "refs/tags/features/$f/$VERSION" >/dev/null; then
+    echo "features/$f/$VERSION already exists; skipping the tag"
+  else
+    git tag -a "features/$f/$VERSION" -m "features/$f $VERSION"
+    git push -q origin "features/$f/$VERSION"
+    echo "pushed features/$f/$VERSION"
+  fi
+  for i in $(seq 1 30); do
+    if GOPROXY=https://proxy.golang.org GOFLAGS=-mod=mod go list -m "$FEATURE_BASE/$f@$VERSION" >/dev/null 2>&1; then
+      echo "proxy.golang.org serves $FEATURE_BASE/$f@$VERSION"
+      break
+    fi
+    [[ $i == 30 ]] && { echo "the proxy does not serve $FEATURE_BASE/$f@$VERSION after 5 minutes" >&2; exit 1; }
+    sleep 10
+  done
+  sed -i -E "s#($FEATURE_BASE/$f) v[0-9.]+#\1 $VERSION#" template/go.mod.jinja
+done
+# --- end of feature modules ---------------------------------------------------
+
 sed -i -E "s#^(\s*$MODULE) v[0-9.]+#\1 $VERSION#" template/go.mod.jinja
 sed -i -E "s#(\"@andrewmyhre/web-base-ui\": )\"[^\"]*\"#\1\"$UI_URL\"#" template/ui/package.json.jinja
 grep -q "$UI_URL" template/ui/package.json.jinja || { echo "could not pin the UI dependency" >&2; exit 1; }
-git commit -q -am "Pin the template to core and the UI package $VERSION" || true
+git commit -q -am "Pin the template to core, features and the UI package $VERSION" || true
 SAMPLE=$(mktemp -d)
 $COPIER copy --vcs-ref HEAD --defaults --trust --quiet . "$SAMPLE" \
-  -d project_slug=release-check -d github_repo=example/release-check
+  -d project_slug=release-check -d github_repo=example/release-check \
+  -d feature_example=true
 ( cd "$SAMPLE" && GOFLAGS=-mod=mod go mod tidy && go build ./... && go vet ./... )
 # Install against the real URL (rewriting the lockfile), then prove the
 # frozen install and the UI checks pass with the result.
@@ -108,7 +146,8 @@ git push -q -u origin "release/$VERSION"
 cat <<EOF
 
 Pushed release/$VERSION and created the GitHub release $UI_TAG. Next:
-  1. Open a PR from release/$VERSION to main and wait for CI.
+  1. Open a PR from release/$VERSION to main and wait for CI. Merge it with a
+     merge commit: features/*/$VERSION tags sit on its commits.
   2. Merge it, then tag the merge commit for the template:
        git switch main && git pull --ff-only
        git tag -a $VERSION -m "go-web-base $VERSION" && git push origin $VERSION

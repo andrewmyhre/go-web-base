@@ -22,7 +22,8 @@ owns, docs, deploy manifests, CI and the UI. See [core/README.md](core/README.md
   `roles.go` and `docs/roles.md` (six roles, edit them per project; core
   ships none), an admin bootstrapped from config, and users with no binding
   refused at sign-in.
-- Optional feature modules (`app.Options.Features`) that add routes,
+- Optional feature modules (`app.Options.Features`), each switched on by a
+  Copier question, that add routes,
   resources and role grants, migrations, settings and a log scope. See
   [features/example](features/example/README.md).
 - `GET /me` and `POST /auth/logout`.
@@ -71,6 +72,16 @@ uvx copier@9.19.1 update
 | `dev_namespace` | `<slug>-dev` | dev environment |
 | `registry` | `192.168.0.10:30500` | image names |
 | `admin_sub` | empty | the global Admin's Google sub |
+| `feature_example` | `false` | installs the `example` feature (see below) |
+
+Each optional feature is a boolean question named `feature_<name>`, default
+`false`. Answering `true` renders only the glue the feature needs: its import
+and entry in `Features` in `main.go`, the module in `go.mod`, its setting in
+`deploy/dev/api.yaml`, a line in the README and `llms.txt`, and its route in
+`ui/openapi.json` and `ui/src/lib/api/openapi.d.ts`. With `false`, nothing of
+the feature appears. To change it later:
+`uvx copier@9.19.1 update -d feature_example=true`. See
+[docs/consuming.md](docs/consuming.md#enabling-a-feature).
 
 Two values are derived and never asked: the lower case of `env_prefix` names
 the cookies (`<ident>_session`, `<ident>_oauth_state`), the Postgres user and
@@ -139,10 +150,11 @@ are your answers.
 
 ### Releasing
 
-Core, the UI package and the template share one version number. Core is
-tagged `core/vX.Y.Z` (the Go convention for a module in a subdirectory), the UI
-package is a GitHub release `ui/vX.Y.Z`, and the template is tagged `vX.Y.Z`,
-one commit later, once it pins both. From a clean, green `main`:
+Core, every feature module, the UI package and the template share one version
+number (lockstep). Core is tagged `core/vX.Y.Z` (the Go convention for a module
+in a subdirectory), each feature `features/<name>/vX.Y.Z`, the UI package is a
+GitHub release `ui/vX.Y.Z`, and the template is tagged `vX.Y.Z`, one commit
+later, once it pins them all. From a clean, green `main`:
 
 ```sh
 scripts/release.sh v0.3.0
@@ -155,24 +167,35 @@ GitHub release `ui/v0.3.0` with `andrewmyhre-web-base-ui-0.3.0.tgz` attached,
 using your `gh` login. No registry or token is involved: generated projects
 depend on the tarball's download URL,
 `https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.3.0/andrewmyhre-web-base-ui-0.3.0.tgz`.
-It then pushes a `release/v0.3.0` branch that pins the template to core and
-that URL, and records the template's `go.sum` and `ui/pnpm-lock.yaml` (the
-lockfile is made by installing a rendered sample against the real URL, then
-checked with `--frozen-lockfile`). Open a PR from that branch, merge it, and
-tag the merge commit `v0.3.0`. The tag's pipeline runs `release-check`, which
-builds and tests a sample against the published core with no `replace` and a
-read-only `go.sum`, and `release-check-ui`, which installs the sample's UI
-from the release URL with a frozen lockfile and runs its checks.
+On a `release/v0.3.0` branch it then makes `features/example/go.mod` require
+that core (the in-repo `replace` stays), commits that, tags and pushes
+`features/example/v0.3.0` from that commit, and waits for the proxy to serve it
+too. It pins the template to core, to each feature and to the UI URL, renders a
+sample with every feature on to record `template/go.sum` (so it holds the
+hashes of all of them) and `template/ui/pnpm-lock.yaml` (made by installing
+that sample's UI against the real URL, then checked with `--frozen-lockfile`;
+one lockfile serves every render, since a feature changes only `openapi.json`
+and `openapi.d.ts`, not the UI's dependencies), and pushes the branch. Open a
+PR from that branch and merge it with a merge commit, not a squash, so the
+feature tag's commit stays in `main`'s history. Then tag the merge commit
+`v0.3.0`. The tag's pipeline runs `release-check`, which builds and tests
+samples with every feature off and on against the published modules with no
+`replace` and a read-only `go.sum`, and `release-check-ui`, which installs
+each sample's UI from the release URL with a frozen lockfile and runs its
+checks.
 
-Re-running the script skips what exists: the core tag and the `ui/vX.Y.Z`
-release. Until the first release, the template pins the `ui/v0.2.0` URL, which
-does not exist yet, and its `ui/pnpm-lock.yaml` does not match; the pipeline's
-`ui` step does not use either (below), and `release.sh` fixes both.
+Re-running the script skips what exists: the core tag, the feature tags and
+the `ui/vX.Y.Z` release. Until the first release, the template pins the
+`ui/v0.2.0` URL, which does not exist yet, and its `ui/pnpm-lock.yaml` does not
+match; the pipeline's `ui` steps do not use either (below), and `release.sh`
+fixes both.
 
 Semver applies to core's exported Go API and to the `app.Options` and feature
 contract. Before `v1`, a minor version may break them; say how in the release
-notes. Feature modules (`features/<name>/`) are tagged on their own
-(`features/<name>/vX.Y.Z`).
+notes. A feature module's version is the release's version, even when the feature did
+not change, so a project that enables one always pairs it with the core of the
+same release. Each feature module states the core it requires in its own
+`go.mod`.
 
 ### Template CI
 
@@ -186,13 +209,18 @@ notes. Feature modules (`features/<name>/`) are tagged on their own
   commit, then `gofmt`, `go vet` and `go test`;
 - in `ui-package`, installs, builds, tests, type-checks and packs
   `packages/web-base-ui` (committed version `0.0.0`);
-- in `ui`, points the sample's `@andrewmyhre/web-base-ui` dependency at that
-  local tarball (`pnpm pkg set` to a `file:` path, then a non-frozen install,
-  since the pinned release URL may not exist yet), so the template is tested
-  against the UI package in the same commit, then runs `check:client`, `test`,
-  `check` and `build`;
+- in the `ui` step, points the sample's `@andrewmyhre/web-base-ui` dependency
+  at that local tarball (`pnpm pkg set` to a `file:` path, then a non-frozen
+  install, since the pinned release URL may not exist yet), so the template is
+  tested against the UI package in the same commit, then runs `check:client`,
+  `test`, `check` and `build`;
+- does all of that twice, in parallel: `sample/` with every feature off (the
+  defaults) and `sample-features/` with every feature on (steps `go` and `ui`,
+  and `go-features` and `ui-features`). With a feature on, the Go step also
+  replaces `github.com/andrewmyhre/go-web-base/features/<name>` with the
+  in-repo path. A sweep fails the build if feature glue appears in `sample/`;
 - on a `v*` tag, `release-check-ui` runs the same UI checks in the untouched
-  sample with the pinned URL and a frozen lockfile;
+  samples with the pinned URL and a frozen lockfile;
 - tests `core/` and `features/example` against real Postgres and Redis
   services.
 
