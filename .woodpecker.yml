@@ -46,6 +46,8 @@ steps:
           echo "sweep: an unrendered [[ ]] tag survives in the sample" >&2
           exit 1
         fi
+        # An untouched copy for release-check: the go step below edits sample/.
+        cp -r sample release-sample
 
   - name: go
     image: golang:1.26
@@ -55,6 +57,24 @@ steps:
       - go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core
       - go mod tidy
       - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go test ./...
+
+  # On a template tag, prove the tagged template works for a real consumer:
+  # the sample builds and tests against the published core it pins, with no
+  # replace and a read-only go.sum, so a missing or wrong go.sum line fails.
+  - name: release-check
+    image: golang:1.26
+    depends_on: [render]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    environment:
+      GOFLAGS: -mod=readonly
+      GOPROXY: https://proxy.golang.org
+    commands:
+      - cd release-sample
+      - go build ./...
       - go vet ./...
       - go test ./...
 

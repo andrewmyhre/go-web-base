@@ -126,11 +126,31 @@ are your answers.
 - A generated project's tests need no Postgres or Redis: those tests live in
   `core/` and run against Woodpecker `services:` in this repository's own CI.
   The generated pipeline therefore has no test services and no secrets.
-- A generated project's `go.mod` requires a core release
-  (`github.com/andrewmyhre/go-web-base/core v0.2.0`). `go.sum` has no `core`
-  line, because a release has to exist to be hashed: when core is tagged, run
-  `go mod tidy` in a generated project (or render the template) and keep the
-  new line in `template/go.sum`.
+- A generated project's `go.mod` requires a published core release, and
+  `template/go.sum` carries its hash. Both are set by the release script below,
+  because a release has to exist before it can be hashed.
+
+### Releasing
+
+Core and the template share one version number. Core is tagged `core/vX.Y.Z`
+(the Go convention for a module in a subdirectory) and the template `vX.Y.Z`,
+one commit later, once it pins that core. From a clean, green `main`:
+
+```sh
+scripts/release.sh v0.3.0
+```
+
+The script tags and pushes `core/v0.3.0`, waits until `proxy.golang.org`
+serves it, then pushes a `release/v0.3.0` branch that pins the template to it
+and records its `go.sum`. Open a PR from that branch, merge it, and tag the
+merge commit `v0.3.0`. The tag's pipeline runs `release-check`, which builds
+and tests a sample against the published core with no `replace` and a
+read-only `go.sum`.
+
+Semver applies to core's exported Go API and to the `app.Options` and feature
+contract. Before `v1`, a minor version may break them; say how in the release
+notes. Feature modules (`features/<name>/`) are tagged on their own
+(`features/<name>/vX.Y.Z`).
 
 ### Template CI
 
