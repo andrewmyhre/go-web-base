@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Avatar from './Avatar.svelte';
 	import AccountModal from './AccountModal.svelte';
-	import type { Me } from '$lib/api';
+	import type { Me } from '../api/index';
 
 	let { user, onSignOut }: { user: Me; onSignOut: () => void } = $props();
 

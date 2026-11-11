@@ -8,6 +8,10 @@
 # may not exist yet, so the go step points it at ../core, the core in the same
 # commit, before it builds anything.
 #
+# The generated UI imports @andrewmyhre/web-base-ui, whose release URL may not
+# exist yet, so the ui step builds and packs packages/web-base-ui from this
+# commit and points the sample at that tarball before it checks anything.
+#
 # The core step tests the core/ Go module, a plain module that is not
 # rendered. Unlike the sample it runs its Postgres and Redis tests for real,
 # against the services: below, which Woodpecker starts for the workflow and
@@ -93,13 +97,53 @@ steps:
       - go vet ./...
       - go test ./...
 
+  # The UI package is tested and packed from this commit, then the sample
+  # depends on that local tarball instead of the pinned release URL, the way
+  # the go step points the sample at ../core. The sample's lockfile is
+  # rewritten by the add, so this step cannot use --frozen-lockfile; the
+  # frozen check on the pinned URL is release-check-ui.
+  - name: ui-package
+    image: node:22.23.4-bookworm
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd packages/web-base-ui
+      - corepack enable
+      - pnpm install --frozen-lockfile
+      - pnpm build
+      - pnpm test
+      - pnpm check
+      # Version 0.0.0 as committed, so the tarball is andrewmyhre-web-base-ui-0.0.0.tgz.
+      - pnpm pack --pack-destination ../..
+      - test -f ../../andrewmyhre-web-base-ui-0.0.0.tgz
+
   - name: ui
     image: node:22.23.4-bookworm
-    depends_on: [render]
+    depends_on: [render, ui-package]
     environment:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     commands:
       - cd sample/ui
+      - corepack enable
+      - pnpm add ../../andrewmyhre-web-base-ui-0.0.0.tgz
+      - pnpm run check:client
+      - pnpm test
+      - pnpm check
+      - pnpm build
+
+  # On a template tag, the same UI checks against the pinned release URL
+  # with a frozen lockfile, so a stale pnpm-lock.yaml or a missing release
+  # asset fails here. scripts/release.sh creates the release and the lockfile.
+  - name: release-check-ui
+    image: node:22.23.4-bookworm
+    depends_on: [render]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd release-sample/ui
       - corepack enable
       - pnpm install --frozen-lockfile
       - pnpm run check:client

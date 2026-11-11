@@ -2,10 +2,10 @@
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
 // The PWA service worker. SvelteKit builds and registers it. The decision
-// for each request is in $lib/sw-policy, which never lets /auth/* or /me
+// for each request is in @andrewmyhre/web-base-ui/sw-policy, which never lets /auth/* or /me
 // near the cache; this file only carries the decisions out.
 import { build, files, version } from '$service-worker';
-import { strategyFor } from '$lib/sw-policy';
+import { strategyFor } from '@andrewmyhre/web-base-ui/sw-policy';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const CACHE = `[[ ident ]]-ui-${version}`;

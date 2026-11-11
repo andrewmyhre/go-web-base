@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isApiPath, strategyFor } from './sw-policy';
 
-const origin = 'https://[[ dev_host ]]';
+const origin = 'https://app.test';
 // A precache that wrongly lists API paths too: the bypass must still win.
 const precached = new Set(['/', '/_app/immutable/entry/start.js', '/manifest.webmanifest', '/me', '/auth/google']);
 

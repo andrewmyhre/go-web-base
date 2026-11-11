@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Avatar from './Avatar.svelte';
-	import { roleLabel, type Me } from '$lib/api';
+	import { roleLabel, type Me } from '../api/index';
 
 	let { user, open, onclose }: { user: Me; open: boolean; onclose: () => void } = $props();
 

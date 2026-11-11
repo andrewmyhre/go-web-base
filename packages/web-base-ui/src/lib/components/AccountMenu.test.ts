@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import AccountMenu from './AccountMenu.svelte';
-import type { Me } from '$lib/api';
+import type { Me } from '../api/index';
 
 const andrew: Me = {
 	id: '104242424242424242424',
