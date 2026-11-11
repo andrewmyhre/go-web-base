@@ -122,38 +122,64 @@ copied layout (template `v0.1.x`) get core by running `copier update`.
 
 ## Roles and permissions
 
-**Available now:** the role graph is fixed in core (`db.Roles()`).
-`docs/roles.md` documents it, and `TestRolesMatchDocs` in your project fails
-until the two agree.
+**Available now.** Core ships no roles and no resources. Your project defines
+its role graph in `roles.go` at the project root (`Roles()` and `Resources()`),
+and `cmd/<slug>/main.go` passes them to core as `app.Options.Roles` and
+`app.Options.Resources`. `docs/roles.md` documents the graph, and
+`TestRolesMatchDocs` in your project fails until the two agree.
 
-**Planned: IMM-2071.** Your app registers its role graph with core at startup.
-Features add their own resources and grant them to your roles. Every route
-still declares a permission through `server.Register`, and an unguarded route
-still fails at startup.
+Features add their own resources and grant them to your roles, so you decide
+who can use what a feature adds. Every route still declares a permission
+through `server.Register`. Two guarantees hold at startup, before anything
+connects:
+
+- a permission that names a resource or verb nobody registered is refused,
+  whether it is on a route or in a role;
+- a route with no declared permission cannot be served.
+
+A feature grant to a role you do not have is refused as well, with the
+feature and role named. The admin bootstrap and "no binding, no sign-in" work
+as before: your graph must define `Admin`. See
+[core/README.md](../core/README.md#roles-and-resources) for the details.
 
 ## Writing a feature
 
-**Planned: IMM-2074, with an `example` feature module to copy.** A feature is a
-Go module that exposes one entry point:
+**Available now.** A feature is a Go module with one type that implements
+`app.Feature`:
 
 ```go
-func Install(app *core.App) error
+type Feature interface {
+	Name() string                // lower case id: log scope, migration table, config prefix
+	Install(i *app.Installer) error
+}
 ```
 
-Through `app` it can contribute:
+`Install` only declares. Through the `Installer` it can contribute:
 
-- routes, registered with `server.Register` so each declares a permission;
-- resources, and grants of them to roles;
-- goose migrations, embedded in the module with their own version table
-  (IMM-2072);
-- a config section, bound to env vars under the project's prefix, such as
-  `PREFIX_AGENT_*` (IMM-2073);
-- a log scope.
+- routes (`Routes`), registered with `server.Register` so each declares a
+  permission;
+- resources (`Resource`), and grants of them to roles (`Grant`);
+- goose migrations (`Migrations`), embedded in the module, each module in its
+  own version table, `goose_<name>_version`;
+- settings (`String`, `Int`, `Bool`, `Secret`), bound to flags and to env vars
+  under the project's prefix, such as `PREFIX_AGENT_*`; secrets are env only;
+- a log scope (`Log`), so every line carries `scope=<name>`.
 
-If it has UI, it ships a matching npm package. It also gets a Copier question
-and the glue that question renders. Feature modules are versioned
-independently of `core`. Each one states the range of `core` versions it
-supports.
+`Install` runs before the command line is parsed, because settings become
+flags, so it must not read a setting or open a connection. The function
+passed to `Routes` runs at startup with the settings resolved, and is where
+the feature reads them.
+
+[features/example](../features/example/README.md) uses every hook and has its
+own end to end test. Copy it to start a feature. A project installs one by
+importing the module and listing it in `Features` in `main.go`; the Copier
+question that renders that glue is planned (IMM-2075). Its migrations run
+after core's and in the order the features are listed, before the project's own.
+
+If it has UI, it ships a matching npm package (planned). Feature modules are
+versioned independently of `core`. Each one states the range of `core`
+versions it supports; the example requires `core v0.2.0` and, in this
+repository, builds against `../../core` through a `replace`.
 
 ## Versions and compatibility
 

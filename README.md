@@ -19,8 +19,12 @@ owns, docs, deploy manifests, CI and the UI. See [core/README.md](core/README.md
 - Google OIDC sign-in: browser-bound state taken with `GETDEL`, PKCE, a nonce,
   the ID token verified with go-oidc, and sessions in Redis rotated at sign-in.
 - Casbin RBAC with project domains plus `global`, the example role graph in
-  `docs/roles.md` (six roles, edit them per project), an admin bootstrapped
-  from config, and users with no binding refused at sign-in.
+  `roles.go` and `docs/roles.md` (six roles, edit them per project; core
+  ships none), an admin bootstrapped from config, and users with no binding
+  refused at sign-in.
+- Optional feature modules (`app.Options.Features`) that add routes,
+  resources and role grants, migrations, settings and a log scope. See
+  [features/example](features/example/README.md).
 - `GET /me` and `POST /auth/logout`.
 - A SvelteKit 2 / Svelte 5 PWA in `ui/`, whose API client is generated from the
   API's OpenAPI document. Drift fails CI.
@@ -163,7 +167,8 @@ notes. Feature modules (`features/<name>/`) are tagged on their own
   and `go mod tidy`, so the template is tested against the core in the same
   commit, then `gofmt`, `go vet` and `go test`;
 - runs the UI's `check:client`, `test`, `check` and `build`;
-- tests `core/` itself against real Postgres and Redis services.
+- tests `core/` and `features/example` against real Postgres and Redis
+  services.
 
 The sample's own image build and deploy steps never run: Woodpecker reads only
 the root `.woodpecker.yml`.
@@ -196,3 +201,10 @@ the other packages. `copier update` to a core-based version deletes the files
 the template no longer renders, then the project needs `go mod tidy` once
 (and a `go.sum` line for core, once core is tagged). Edits the project made to
 those packages are lost with them: move them upstream into `core/` first.
+
+A project already on core `v0.2.0` also gains `roles.go` when it updates to
+the template that adds feature support, and its `main.go` must pass
+`Roles` and `Resources` to `app.Options`, because core no longer ships a role
+graph. Copier renders `roles.go` and merges `main.go`; check the merge and run
+`go test ./...`. `TestRolesMatchDocs` now compares `docs/roles.md` with
+`roles.go`.

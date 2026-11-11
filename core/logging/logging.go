@@ -29,6 +29,13 @@ const (
 	ScopeAgent = "agent"
 )
 
+// Scoped returns l with its scope field set to scope. A feature module logs
+// under its own name this way (app.Installer.Log), next to core's fixed
+// scopes. Keep a scope low-cardinality, like the constants above.
+func Scoped(l *zap.Logger, scope string) *zap.Logger {
+	return l.With(zap.String("scope", scope))
+}
+
 // Logger emits contract lines. It is safe for concurrent use.
 type Logger struct {
 	zap      *zap.Logger

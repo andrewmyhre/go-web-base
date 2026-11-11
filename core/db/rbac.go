@@ -1,4 +1,4 @@
-// Package db is the durable storage for the the API API.
+// Package db is the durable storage for the API.
 //
 // It owns the PostgreSQL connection and all data access, the generated
 // queries, and the domain services that sit on top of them. It does not
@@ -73,94 +73,99 @@ e = some(where (p.eft == allow))
 m = g(r.sub, p.sub, r.dom) && r.obj == p.obj && r.act == p.act
 `
 
-// permission is one (resource, verb) a role grants. The strings are the
-// server package's Resource and Verb values (server.Permission); a test in
-// this package validates every one of them against server.Permission.
-type permission struct {
-	resource string
-	action   string
-}
-
-// role is one role of the graph: the roles it inherits from and the
-// permissions it grants on its own.
-type role struct {
-	name        string
-	inherits    []string
-	permissions []permission
-}
-
-// roles is the role graph, one entry per permission. Roles() exports it so
-// a project can test its own docs/roles.md against the table. The table is
-// fixed in core for now.
+// RoleDef is one role of the graph: the roles it inherits from and the
+// permissions it grants on its own, as "Resource: Verb" strings (the form
+// docs/roles.md uses for its bullets, and server.Permission.String gives).
 //
-// Inheritance is a graph, not a ladder: Project Manager inherits Contributor
-// and Secrets Manager, Manager inherits Project Manager, and Admin inherits
-// Manager, Secrets Manager and Workflow Manager. A role's effective
-// permissions are the union of its own and every role it inherits.
-var roles = []role{
-	{
-		name: "Contributor",
-		permissions: []permission{
-			{"Projects", "Read"},
-			{"AgentConversations", "Read"}, {"AgentConversations", "Create"},
-			{"AgentMessages", "Read"}, {"AgentMessages", "Create"}, {"AgentMessages", "Patch"},
-			{"PermissionPrompts", "Answer"},
-			{"Requests", "Read"}, {"Requests", "Patch"},
-			{"ProjectFiles", "Read"}, {"ProjectFiles", "Create"}, {"ProjectFiles", "Patch"}, {"ProjectFiles", "Delete"},
-			{"Workflows", "Read"}, {"Workflows", "Run"},
-			{"WorkflowSteps", "Read"},
-		},
-	},
-	{
-		name: "Secrets Manager",
-		permissions: []permission{
-			{"Secrets", "Create"}, {"Secrets", "Patch"}, {"Secrets", "Delete"},
-		},
-	},
-	{
-		name:     "Project Manager",
-		inherits: []string{"Contributor", "Secrets Manager"},
-		permissions: []permission{
-			{"UserInvitation", "Create"}, {"UserInvitation", "Patch"}, {"UserInvitation", "Delete"},
-		},
-	},
-	{
-		name: "Workflow Manager",
-		permissions: []permission{
-			{"Workflows", "Read"}, {"Workflows", "Create"}, {"Workflows", "Patch"}, {"Workflows", "Delete"},
-			{"WorkflowSteps", "Read"}, {"WorkflowSteps", "Create"}, {"WorkflowSteps", "Patch"}, {"WorkflowSteps", "Delete"},
-			{"WorkflowLink", "Create"}, {"WorkflowLink", "Delete"},
-		},
-	},
-	{
-		name:     "Manager",
-		inherits: []string{"Project Manager"},
-		permissions: []permission{
-			{"Projects", "Create"}, {"Projects", "Patch"}, {"Projects", "Delete"},
-		},
-	},
-	{
-		name:     AdminRole,
-		inherits: []string{"Manager", "Secrets Manager", "Workflow Manager"},
-		permissions: []permission{
-			{"Users", "Read"}, {"Users", "Create"}, {"Users", "Patch"}, {"Users", "Delete"},
-			{"AccessReviews", "Create"},
-			{"Providers", "Read"}, {"Providers", "Create"}, {"Providers", "Patch"}, {"Providers", "Delete"},
-		},
-	},
+// Inheritance is a graph, not a ladder: a role may inherit several roles,
+// and a role's effective permissions are the union of its own and every role
+// it inherits. Core ships no roles: the app supplies the graph in
+// app.Options.Roles, and features add grants to its roles.
+type RoleDef struct {
+	Name        string
+	Inherits    []string
+	Permissions []string
 }
 
-func roleByName(name string) *role {
-	for i := range roles {
-		if roles[i].name == name {
-			return &roles[i]
+// Errors returned for a role graph that cannot be enforced.
+var (
+	// ErrBadRoles is wrapped by every ValidateRoles failure.
+	ErrBadRoles = errors.New("invalid role graph")
+)
+
+// ValidateRoles checks the structure of a role graph: every role is named
+// once, inherits only roles that exist (with no cycle), has well formed
+// permissions, and ends up with at least one effective permission; and the
+// graph holds AdminRole, which the bootstrap binds the configured admin to.
+// It does not know which resources exist: the caller checks each permission
+// against the server's registry (server.Resources.CheckString).
+func ValidateRoles(roles []RoleDef) error {
+	seen := map[string]bool{}
+	for _, r := range roles {
+		if r.Name == "" {
+			return fmt.Errorf("%w: a role has no name", ErrBadRoles)
+		}
+		if seen[r.Name] {
+			return fmt.Errorf("%w: role %q is defined twice", ErrBadRoles, r.Name)
+		}
+		seen[r.Name] = true
+		for _, p := range r.Permissions {
+			if _, _, ok := strings.Cut(p, ": "); !ok {
+				return fmt.Errorf("%w: role %q permission %q is not in the form \"Resource: Verb\"", ErrBadRoles, r.Name, p)
+			}
+		}
+	}
+	if !seen[AdminRole] {
+		return fmt.Errorf("%w: no %q role, which the admin bootstrap needs", ErrBadRoles, AdminRole)
+	}
+	for _, r := range roles {
+		for _, parent := range r.Inherits {
+			if !seen[parent] {
+				return fmt.Errorf("%w: role %q inherits unknown role %q", ErrBadRoles, r.Name, parent)
+			}
+		}
+	}
+	for _, r := range roles {
+		if cyclic(roles, r.Name) {
+			return fmt.Errorf("%w: role %q inherits itself", ErrBadRoles, r.Name)
+		}
+		if len(flatten(roles, r.Name)) == 0 {
+			return fmt.Errorf("%w: role %q grants nothing", ErrBadRoles, r.Name)
 		}
 	}
 	return nil
 }
 
-// isRoleName reports whether name is one of the roles above.
-func isRoleName(name string) bool { return roleByName(name) != nil }
+// cyclic reports whether name can reach itself through inherits.
+func cyclic(roles []RoleDef, name string) bool {
+	visited := map[string]bool{}
+	var walk func(string) bool
+	walk = func(n string) bool {
+		for _, parent := range roleByName(roles, n).Inherits {
+			if parent == name {
+				return true
+			}
+			if visited[parent] {
+				continue
+			}
+			visited[parent] = true
+			if walk(parent) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(name)
+}
+
+func roleByName(roles []RoleDef, name string) *RoleDef {
+	for i := range roles {
+		if roles[i].Name == name {
+			return &roles[i]
+		}
+	}
+	return nil
+}
 
 // flatten returns name's full permission set: its own permissions plus the
 // permissions of every role it (transitively) inherits, de-duplicated, own
@@ -169,27 +174,27 @@ func isRoleName(name string) bool { return roleByName(name) != nil }
 // binding in any project draw the full set: Casbin's domain-scoped role
 // inheritance would only reach links stored in the same domain, but a role's
 // permissions are a fixed set regardless of where its members sit.
-func flatten(name string) []permission {
+func flatten(roles []RoleDef, name string) []string {
 	visited := map[string]bool{}
-	seen := map[permission]bool{}
-	var out []permission
+	seen := map[string]bool{}
+	var out []string
 	var visit func(string)
 	visit = func(r string) {
 		if visited[r] {
 			return
 		}
 		visited[r] = true
-		role := roleByName(r)
+		role := roleByName(roles, r)
 		if role == nil {
 			return
 		}
-		for _, p := range role.permissions {
+		for _, p := range role.Permissions {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
 			}
 		}
-		for _, parent := range role.inherits {
+		for _, parent := range role.Inherits {
 			visit(parent)
 		}
 	}
@@ -197,48 +202,36 @@ func flatten(name string) []permission {
 	return out
 }
 
-// RoleDef is one role as the table holds it: the roles it inherits from and
-// the permissions it grants on its own, as "Resource: Verb" strings (the
-// form docs/roles.md uses for its bullets).
-type RoleDef struct {
-	Name        string
-	Inherits    []string
-	Permissions []string
-}
-
-// Roles returns the role table, in table order, as copies the caller may
-// modify. It is the unflattened graph: a role's own permissions and the
-// names it inherits from. A project tests its docs/roles.md against it.
-func Roles() []RoleDef {
-	out := make([]RoleDef, 0, len(roles))
+// RolePermissions returns every role's flattened permissions as
+// "Resource: Verb" strings, sorted, keyed by role name. It is the role graph
+// as the enforcer sees it, for checks outside this package.
+func RolePermissions(roles []RoleDef) map[string][]string {
+	out := make(map[string][]string, len(roles))
 	for _, r := range roles {
-		d := RoleDef{Name: r.name, Inherits: append([]string(nil), r.inherits...)}
-		for _, p := range r.permissions {
-			d.Permissions = append(d.Permissions, p.resource+": "+p.action)
-		}
-		out = append(out, d)
+		perms := append([]string(nil), flatten(roles, r.Name)...)
+		sort.Strings(perms)
+		out[r.Name] = perms
 	}
 	return out
 }
 
-// RolePermissions returns every role's flattened permissions as
-// "Resource: Verb" strings, sorted, keyed by role name. It is the role graph
-// as the enforcer sees it, for checks outside this package.
-func RolePermissions() map[string][]string {
-	out := make(map[string][]string, len(roles))
-	for _, r := range roles {
-		var perms []string
-		for _, p := range flatten(r.name) {
-			perms = append(perms, p.resource+": "+p.action)
+// CloneRoles returns a deep copy of roles, so a caller can add grants
+// without touching the original.
+func CloneRoles(roles []RoleDef) []RoleDef {
+	out := make([]RoleDef, len(roles))
+	for i, r := range roles {
+		out[i] = RoleDef{
+			Name:        r.Name,
+			Inherits:    append([]string(nil), r.Inherits...),
+			Permissions: append([]string(nil), r.Permissions...),
 		}
-		sort.Strings(perms)
-		out[r.name] = perms
 	}
 	return out
 }
 
 // NewEnforcer builds the Casbin enforcer over the Casbin adapter for pool:
-// the RBAC-with-domains model, the role definitions in Roles(), and, when
+// the RBAC-with-domains model, the role definitions in roles (checked with
+// ValidateRoles first), and, when
 // adminSub is not empty, the binding of adminSub to the Admin role in the
 // global domain.
 //
@@ -247,9 +240,12 @@ func RolePermissions() map[string][]string {
 // from a role stops applying on the next start. Running it again over the
 // same pool (a restart) writes nothing. The admin binding is only ever
 // added: changing adminSub does not revoke the previous admin.
-func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string) (*casbin.Enforcer, error) {
+func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string, roles []RoleDef) (*casbin.Enforcer, error) {
+	if err := ValidateRoles(roles); err != nil {
+		return nil, err
+	}
 	if adminSub != "" {
-		if err := checkAdminSub(adminSub); err != nil {
+		if err := checkAdminSub(roles, adminSub); err != nil {
 			return nil, fmt.Errorf("bootstrap admin %q: %w", adminSub, err)
 		}
 	}
@@ -263,7 +259,7 @@ func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string) (*cas
 	}
 	// casbin.NewEnforcer has already loaded the stored policy, so the
 	// reconcile below writes only the difference: a restart is a no-op.
-	if err := loadRoleDefinitions(e); err != nil {
+	if err := loadRoleDefinitions(e, roles); err != nil {
 		return nil, fmt.Errorf("load role definitions: %w", err)
 	}
 	if adminSub != "" {
@@ -275,8 +271,8 @@ func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string) (*cas
 }
 
 // checkAdminSub refuses an admin subject that cannot be an OIDC sub.
-func checkAdminSub(sub string) error {
-	if isRoleName(sub) {
+func checkAdminSub(roles []RoleDef, sub string) error {
+	if roleByName(roles, sub) != nil {
 		return ErrSubjectIsRole
 	}
 	if strings.Contains(sub, "@") {
@@ -287,11 +283,12 @@ func checkAdminSub(sub string) error {
 
 // wantedPolicies is every role's flattened permissions as p rules, all in
 // the global domain.
-func wantedPolicies() [][]string {
+func wantedPolicies(roles []RoleDef) [][]string {
 	var out [][]string
 	for _, r := range roles {
-		for _, p := range flatten(r.name) {
-			out = append(out, []string{r.name, p.resource, p.action, Global})
+		for _, p := range flatten(roles, r.Name) {
+			res, verb, _ := strings.Cut(p, ": ")
+			out = append(out, []string{r.Name, res, verb, Global})
 		}
 	}
 	return out
@@ -301,8 +298,8 @@ func ruleKey(rule []string) string { return strings.Join(rule, "\x00") }
 
 // loadRoleDefinitions reconciles e's p rules to wantedPolicies: it removes
 // every p rule not in that set and adds every one missing from e.
-func loadRoleDefinitions(e *casbin.Enforcer) error {
-	wanted := wantedPolicies()
+func loadRoleDefinitions(e *casbin.Enforcer, roles []RoleDef) error {
+	wanted := wantedPolicies(roles)
 	want := make(map[string]bool, len(wanted))
 	for _, rule := range wanted {
 		want[ruleKey(rule)] = true
@@ -335,6 +332,20 @@ func bindAdmin(e *casbin.Enforcer, adminSub string) error {
 	return nil
 }
 
+// refuseRoleName returns ErrSubjectIsRole when sub is a role of the loaded
+// graph, which is any name the policy defines permissions for (ValidateRoles
+// guarantees every role grants something).
+func refuseRoleName(e *casbin.Enforcer, sub string) error {
+	rules, err := e.GetFilteredPolicy(0, sub)
+	if err != nil {
+		return fmt.Errorf("read role definitions: %w", err)
+	}
+	if len(rules) > 0 {
+		return fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	}
+	return nil
+}
+
 // Authorize reports whether sub may act on object with action in project. A
 // binding in project's own domain applies there; a binding in the global
 // domain applies in every project, so the global domain is checked in
@@ -344,8 +355,8 @@ func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, e
 	if sub == "" {
 		return false, ErrEmptySubject
 	}
-	if isRoleName(sub) {
-		return false, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	if err := refuseRoleName(e, sub); err != nil {
+		return false, err
 	}
 	ok, err := e.Enforce(sub, project, object, action)
 	if err != nil {
@@ -371,8 +382,8 @@ func HasRoleBinding(e *casbin.Enforcer, sub string) (bool, error) {
 	if sub == "" {
 		return false, ErrEmptySubject
 	}
-	if isRoleName(sub) {
-		return false, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	if err := refuseRoleName(e, sub); err != nil {
+		return false, err
 	}
 	rules, err := e.GetFilteredGroupingPolicy(0, sub)
 	if err != nil {
@@ -397,8 +408,8 @@ func RoleBindingsOf(e *casbin.Enforcer, sub string) ([]Binding, error) {
 	if sub == "" {
 		return nil, ErrEmptySubject
 	}
-	if isRoleName(sub) {
-		return nil, fmt.Errorf("%w: %q", ErrSubjectIsRole, sub)
+	if err := refuseRoleName(e, sub); err != nil {
+		return nil, err
 	}
 	rules, err := e.GetFilteredGroupingPolicy(0, sub)
 	if err != nil {

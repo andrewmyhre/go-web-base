@@ -86,13 +86,32 @@ type Router struct {
 	sessions      SessionStore
 	authorizer    Authorizer
 	sessionCookie string
+	// resources are the resources a route's permission may name. Build
+	// checks every route against it.
+	resources *Resources
 }
 
 // NewRouter returns a router holding only the OpenAPI spec route. title and
 // version describe the API in its OpenAPI document.
 func NewRouter(title, version string) *Router {
-	r := &Router{title: title, version: version}
+	r := &Router{title: title, version: version, resources: NewResources()}
 	r.regs = append(r.regs, specRegistration())
+	return r
+}
+
+// Resources is the registry of resources this router accepts permissions
+// for. Register a resource before Build, in any order relative to the routes
+// that use it: Build refuses a route whose permission names a resource or
+// verb that is not registered.
+func (r *Router) Resources() *Resources { return r.resources }
+
+// WithResources replaces the router's registry with rs, for an app that
+// assembles its resources (and checks its role graph against them) before it
+// has a router. A nil rs is ignored.
+func (r *Router) WithResources(rs *Resources) *Router {
+	if rs != nil {
+		r.resources = rs
+	}
 	return r
 }
 
@@ -232,6 +251,9 @@ func (r *Router) build(log *zap.Logger) (huma.API, http.Handler, error) {
 	for _, reg := range r.regs {
 		if err := checkRoute(reg); err != nil {
 			return nil, nil, err
+		}
+		if err := r.resources.Check(reg.permission); err != nil {
+			return nil, nil, fmt.Errorf("route %s %s: %w", reg.method, reg.path, err)
 		}
 		if err := r.checkAuth(reg); err != nil {
 			return nil, nil, err

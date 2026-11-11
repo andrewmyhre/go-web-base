@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/andrewmyhre/go-web-base/core/db"
+	"github.com/andrewmyhre/go-web-base/core/server"
 )
 
 // docRole is one role as docs/roles.md writes it.
@@ -82,14 +83,14 @@ func sorted(s []string) []string {
 	return c
 }
 
-// TestRolesMatchDocs proves docs/roles.md describes the role graph core
-// ships (db.Roles): the same roles, each with the same own permissions and
-// the same parents.
+// TestRolesMatchDocs proves docs/roles.md describes the role graph in
+// roles.go: the same roles, each with the same own permissions and the same
+// parents.
 func TestRolesMatchDocs(t *testing.T) {
 	doc := parseRolesDoc(t)
-	roles := db.Roles()
+	roles := Roles()
 	if len(doc) != len(roles) {
-		t.Errorf("docs/roles.md has %d roles, core has %d", len(doc), len(roles))
+		t.Errorf("docs/roles.md has %d roles, roles.go has %d", len(doc), len(roles))
 	}
 	for _, r := range roles {
 		d, ok := doc[r.Name]
@@ -98,10 +99,33 @@ func TestRolesMatchDocs(t *testing.T) {
 			continue
 		}
 		if got, want := sorted(r.Permissions), sorted(d.perms); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s own permissions:\n core %v\n docs %v", r.Name, got, want)
+			t.Errorf("%s own permissions:\n roles.go %v\n docs     %v", r.Name, got, want)
 		}
 		if got, want := sorted(r.Inherits), sorted(d.inherits); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s inherits %v in core, docs say %v", r.Name, got, want)
+			t.Errorf("%s inherits %v in roles.go, docs say %v", r.Name, got, want)
+		}
+	}
+}
+
+// TestRolesAreEnforceable proves the graph is one core accepts: it is
+// well formed (it has an Admin, no cycles, no empty role) and every
+// permission names a resource and verb that Resources registers. The server
+// checks the same at startup; this fails the build first.
+func TestRolesAreEnforceable(t *testing.T) {
+	if err := db.ValidateRoles(Roles()); err != nil {
+		t.Fatal(err)
+	}
+	rs := server.NewResources()
+	for _, def := range Resources() {
+		if err := rs.Register(def); err != nil {
+			t.Fatalf("register %s: %v", def.Name, err)
+		}
+	}
+	for _, r := range Roles() {
+		for _, p := range r.Permissions {
+			if err := rs.CheckString(p); err != nil {
+				t.Errorf("role %s: %v", r.Name, err)
+			}
 		}
 	}
 }

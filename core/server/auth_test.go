@@ -168,7 +168,7 @@ func newSignInRigWith(t *testing.T, b *bindings) *signInRig {
 		rb = b
 	}
 	auth := NewAuth(g, rig.sessions, rig.attempts, rb, log, fakeClientSecret, testNames)
-	r := NewRouter("t", "0").WithAuth(rig.sessions, nil, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(rig.sessions, nil, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(nil, nil)); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 
@@ -12,13 +13,8 @@ import (
 )
 
 // hasPerm reports whether perms grants action on resource.
-func hasPerm(perms []permission, resource, action string) bool {
-	for _, p := range perms {
-		if p.resource == resource && p.action == action {
-			return true
-		}
-	}
-	return false
+func hasPerm(perms []string, resource, action string) bool {
+	return slices.Contains(perms, resource+": "+action)
 }
 
 func sorted(s []string) []string {
@@ -58,7 +54,7 @@ func TestFlatten(t *testing.T) {
 		{"Admin", "Secrets", "Read", false}, // no role reads secret values
 	}
 	for _, c := range cases {
-		if got := hasPerm(flatten(c.role), c.resource, c.verb); got != c.want {
+		if got := hasPerm(flatten(exampleRoles, c.role), c.resource, c.verb); got != c.want {
 			t.Errorf("%s has %s: %s = %v, want %v", c.role, c.resource, c.verb, got, c.want)
 		}
 	}
@@ -66,7 +62,7 @@ func TestFlatten(t *testing.T) {
 
 func mustEnforcer(t *testing.T, pool *pgxpool.Pool, adminSub string) *casbin.Enforcer {
 	t.Helper()
-	e, err := NewEnforcer(context.Background(), pool, adminSub)
+	e, err := NewEnforcer(context.Background(), pool, adminSub, exampleRoles)
 	if err != nil {
 		t.Fatalf("NewEnforcer(%q): %v", adminSub, err)
 	}
@@ -159,10 +155,10 @@ func TestRBACDefaultDeny(t *testing.T) {
 func TestAuthorizeRefusesRoleSubject(t *testing.T) {
 	pool, _ := testAdapter(t)
 	e := mustEnforcer(t, pool, "")
-	for _, r := range roles {
-		ok, err := Authorize(e, r.name, "proj-1", "Projects", "Read")
+	for _, r := range exampleRoles {
+		ok, err := Authorize(e, r.Name, "proj-1", "Projects", "Read")
 		if ok || !errors.Is(err, ErrSubjectIsRole) {
-			t.Errorf("Authorize(%q) = %v, %v; want false, ErrSubjectIsRole", r.name, ok, err)
+			t.Errorf("Authorize(%q) = %v, %v; want false, ErrSubjectIsRole", r.Name, ok, err)
 		}
 	}
 	if ok, err := Authorize(e, "", "proj-1", "Projects", "Read"); ok || !errors.Is(err, ErrEmptySubject) {
@@ -190,7 +186,7 @@ func TestBootstrapRefusesBadAdminSub(t *testing.T) {
 		"Admin":              ErrSubjectIsRole,
 		"Contributor":        ErrSubjectIsRole,
 	} {
-		if _, err := NewEnforcer(context.Background(), pool, sub); !errors.Is(err, want) {
+		if _, err := NewEnforcer(context.Background(), pool, sub, exampleRoles); !errors.Is(err, want) {
 			t.Errorf("NewEnforcer(%q) err = %v, want %v", sub, err, want)
 		}
 	}
@@ -214,7 +210,7 @@ func TestRBACIdempotent(t *testing.T) {
 	pool, _ := testAdapter(t)
 	mustEnforcer(t, pool, "admin-sub")
 	p1, g1 := casbinRows(t, pool)
-	wantP := len(wantedPolicies())
+	wantP := len(wantedPolicies(exampleRoles))
 	if p1 != wantP || g1 != 1 {
 		t.Fatalf("first start: p=%d g=%d, want p=%d g=1", p1, g1, wantP)
 	}
@@ -244,8 +240,8 @@ func TestRoleDefinitionsReconcile(t *testing.T) {
 	wantAuth(t, e2, "dave", "proj-1", "Users", "Delete", false)
 	wantAuth(t, e2, "dave", "proj-1", "Secrets", "Create", false)
 	wantAuth(t, e2, "dave", "proj-1", "Projects", "Read", true)
-	if p, _ := casbinRows(t, pool); p != len(wantedPolicies()) {
-		t.Errorf("p rows = %d, want %d", p, len(wantedPolicies()))
+	if p, _ := casbinRows(t, pool); p != len(wantedPolicies(exampleRoles)) {
+		t.Errorf("p rows = %d, want %d", p, len(wantedPolicies(exampleRoles)))
 	}
 }
 
@@ -277,9 +273,9 @@ func TestHasRoleBinding(t *testing.T) {
 			t.Errorf("HasRoleBinding(%q) = %v, want %v", sub, got, want)
 		}
 	}
-	for _, r := range roles {
-		if ok, err := HasRoleBinding(e, r.name); ok || !errors.Is(err, ErrSubjectIsRole) {
-			t.Errorf("HasRoleBinding(%q) = %v, %v; want false, ErrSubjectIsRole", r.name, ok, err)
+	for _, r := range exampleRoles {
+		if ok, err := HasRoleBinding(e, r.Name); ok || !errors.Is(err, ErrSubjectIsRole) {
+			t.Errorf("HasRoleBinding(%q) = %v, %v; want false, ErrSubjectIsRole", r.Name, ok, err)
 		}
 	}
 	if ok, err := HasRoleBinding(e, ""); ok || !errors.Is(err, ErrEmptySubject) {
@@ -329,9 +325,9 @@ func TestRoleBindingsOf(t *testing.T) {
 			t.Errorf("RoleBindingsOf(%q) = %#v, want %#v", sub, got, want)
 		}
 	}
-	for _, r := range roles {
-		if got, err := RoleBindingsOf(e, r.name); got != nil || !errors.Is(err, ErrSubjectIsRole) {
-			t.Errorf("RoleBindingsOf(%q) = %v, %v; want nil, ErrSubjectIsRole", r.name, got, err)
+	for _, r := range exampleRoles {
+		if got, err := RoleBindingsOf(e, r.Name); got != nil || !errors.Is(err, ErrSubjectIsRole) {
+			t.Errorf("RoleBindingsOf(%q) = %v, %v; want nil, ErrSubjectIsRole", r.Name, got, err)
 		}
 	}
 	if got, err := RoleBindingsOf(e, ""); got != nil || !errors.Is(err, ErrEmptySubject) {
@@ -339,25 +335,53 @@ func TestRoleBindingsOf(t *testing.T) {
 	}
 }
 
-// TestRolesExportsTheTable proves Roles() is the table: the same roles in
-// the same order with the same own permissions and parents, as copies.
-func TestRolesExportsTheTable(t *testing.T) {
-	got := Roles()
-	if len(got) != len(roles) {
-		t.Fatalf("Roles() has %d roles, table has %d", len(got), len(roles))
+// TestValidateRoles proves a graph core cannot enforce is refused up front,
+// and the example graph is accepted.
+func TestValidateRoles(t *testing.T) {
+	if err := ValidateRoles(exampleRoles); err != nil {
+		t.Fatalf("example graph: %v", err)
 	}
-	for i, r := range roles {
-		if got[i].Name != r.name || len(got[i].Permissions) != len(r.permissions) || !reflect.DeepEqual(sorted(got[i].Inherits), sorted(r.inherits)) {
-			t.Errorf("Roles()[%d] = %+v, table has %+v", i, got[i], r)
-		}
-		if len(r.permissions) > 0 {
-			if want := r.permissions[0].resource + ": " + r.permissions[0].action; got[i].Permissions[0] != want {
-				t.Errorf("%s first permission = %q, want %q", r.name, got[i].Permissions[0], want)
-			}
+	admin := RoleDef{Name: AdminRole, Permissions: []string{"A: Read"}}
+	cases := map[string][]RoleDef{
+		"no roles":          nil,
+		"no Admin":          {{Name: "Viewer", Permissions: []string{"A: Read"}}},
+		"unnamed":           {admin, {Permissions: []string{"A: Read"}}},
+		"duplicate":         {admin, admin},
+		"malformed":         {{Name: AdminRole, Permissions: []string{"A Read"}}},
+		"unknown parent":    {{Name: AdminRole, Inherits: []string{"Ghost"}, Permissions: []string{"A: Read"}}},
+		"grants nothing":    {admin, {Name: "Empty"}},
+		"inherits itself":   {admin, {Name: "Loop", Inherits: []string{"Loop"}, Permissions: []string{"A: Read"}}},
+		"inheritance cycle": {admin, {Name: "X", Inherits: []string{"Y"}, Permissions: []string{"A: Read"}}, {Name: "Y", Inherits: []string{"X"}}},
+	}
+	for name, roles := range cases {
+		if err := ValidateRoles(roles); !errors.Is(err, ErrBadRoles) {
+			t.Errorf("%s: err = %v, want ErrBadRoles", name, err)
 		}
 	}
-	got[0].Name = "changed"
-	if Roles()[0].Name == "changed" {
-		t.Error("Roles() returned the table itself, not a copy")
+}
+
+// TestCloneRolesIsDeep proves a caller can add grants to a clone without
+// touching the original graph.
+func TestCloneRolesIsDeep(t *testing.T) {
+	c := CloneRoles(exampleRoles)
+	if !reflect.DeepEqual(c, exampleRoles) {
+		t.Fatal("clone differs from the original")
+	}
+	c[0].Permissions[0] = "changed"
+	c[2].Inherits[0] = "changed"
+	if exampleRoles[0].Permissions[0] == "changed" || exampleRoles[2].Inherits[0] == "changed" {
+		t.Error("CloneRoles shares backing arrays with the original")
+	}
+}
+
+// TestRolePermissionsFlattens proves the exported view is the flattened,
+// sorted graph.
+func TestRolePermissionsFlattens(t *testing.T) {
+	got := RolePermissions(exampleRoles)
+	if !slices.Contains(got["Manager"], "Secrets: Create") || slices.Contains(got["Contributor"], "Secrets: Create") {
+		t.Errorf("Manager/Contributor flatten wrongly: %v / %v", got["Manager"], got["Contributor"])
+	}
+	if !slices.IsSorted(got[AdminRole]) {
+		t.Error("Admin permissions are not sorted")
 	}
 }
