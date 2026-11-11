@@ -75,6 +75,11 @@ admin_sub:
   default: ""
   validator: "[[% if admin_sub and not (admin_sub | regex_search('^[0-9]+$')) %]]A Google sub is digits only, never an email.[[% endif %]]"
 
+feature_example:
+  type: bool
+  help: Install the example feature (GET /example/hello, granted to Contributor)?
+  default: false
+
 # Derived values: never asked, never stored, recomputed on every update.
 ident:
   type: str

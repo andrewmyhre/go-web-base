@@ -3,10 +3,16 @@
 # rot. Woodpecker reads only this root file, never template/.woodpecker.yml.jinja,
 # so the sample's image build and deploy steps never run here.
 #
+# Every optional feature is a boolean Copier question, so the template is
+# rendered twice: sample/ with every feature off (the defaults) and
+# sample-features/ with every feature on. Both get the same sweeps and the same
+# Go and UI checks, so neither side of a toggle can rot.
+#
 # A generated project imports core instead of carrying a copy, and needs no
 # Postgres or Redis for its own tests. Its go.mod requires a core release that
-# may not exist yet, so the go step points it at ../core, the core in the same
-# commit, before it builds anything.
+# may not exist yet, so the go steps point it at ../core, the core in the same
+# commit (and, with a feature on, at ../features/<name>), before they build
+# anything.
 #
 # The core step tests the core/ Go module and the features/example module,
 # plain modules that are not rendered (the feature builds against ../../core
@@ -37,19 +43,34 @@ steps:
         COPIER="uvx copier@9.19.1"
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample \
           -d project_slug=sample-app -d github_repo=example/sample-app
+        $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample-features \
+          -d project_slug=sample-app -d github_repo=example/sample-app \
+          -d feature_example=true
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . /tmp/control \
           -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE
-        if grep -rIil huddle sample; then
-          echo "sweep: huddle survives in the sample" >&2
-          exit 1
-        fi
         test "$(grep -rIil huddle /tmp/control | wc -l)" -gt 0
-        if grep -rnI --exclude=pnpm-lock.yaml -e '\[\[' -e '\]\]' sample; then
-          echo "sweep: an unrendered [[ ]] tag survives in the sample" >&2
+        for d in sample sample-features; do
+          if grep -rIil huddle $${d}; then
+            echo "sweep: huddle survives in $${d}" >&2
+            exit 1
+          fi
+          if grep -rnI --exclude=pnpm-lock.yaml -e '\[\[' -e '\]\]' $${d}; then
+            echo "sweep: an unrendered [[ ]] tag survives in $${d}" >&2
+            exit 1
+          fi
+        done
+        # With every feature off, nothing of a feature may appear in the Go,
+        # deploy manifests or docs of the sample.
+        if grep -rnI --exclude=pnpm-lock.yaml -e 'features/example' -e 'EXAMPLE_GREETING' -e 'example\.New' -e '/example/hello' -e 'ExampleGreetings' sample; then
+          echo "sweep: example feature glue survives with feature_example=false" >&2
           exit 1
         fi
-        # An untouched copy for release-check: the go step below edits sample/.
+        # And with it on, the glue must be there.
+        grep -q 'example.New("Contributor")' sample-features/cmd/sample-app/main.go
+        grep -q '/example/hello' sample-features/ui/openapi.json
+        # Untouched copies for release-check: the go steps below edit the samples.
         cp -r sample release-sample
+        cp -r sample-features release-sample-features
 
   - name: go
     image: golang:1.26
@@ -57,6 +78,18 @@ steps:
     commands:
       - cd sample
       - go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core
+      - go mod tidy
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go test ./...
+
+  - name: go-features
+    image: golang:1.26
+    depends_on: [render]
+    commands:
+      - cd sample-features
+      - go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core
+      - go mod edit -replace github.com/andrewmyhre/go-web-base/features/example=../features/example
       - go mod tidy
       - test -z "$(gofmt -l .)"
       - go vet ./...
@@ -75,10 +108,7 @@ steps:
       GOFLAGS: -mod=readonly
       GOPROXY: https://proxy.golang.org
     commands:
-      - cd release-sample
-      - go build ./...
-      - go vet ./...
-      - go test ./...
+      - for d in release-sample release-sample-features; do (cd $${d} && go build ./... && go vet ./... && go test ./...); done
 
   - name: core
     image: golang:1.26
@@ -106,6 +136,20 @@ steps:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     commands:
       - cd sample/ui
+      - corepack enable
+      - pnpm install --frozen-lockfile
+      - pnpm run check:client
+      - pnpm test
+      - pnpm check
+      - pnpm build
+
+  - name: ui-features
+    image: node:22.23.4-bookworm
+    depends_on: [render]
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd sample-features/ui
       - corepack enable
       - pnpm install --frozen-lockfile
       - pnpm run check:client

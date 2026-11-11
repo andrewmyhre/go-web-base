@@ -29,7 +29,12 @@ is specific to [[ project_name ]]:
 - `roles.go`: the example role graph (`Roles()`) and the resources its
   permissions name (`Resources()`). Core ships neither; main passes them to
   core.
-- `docs/roles.md`: the same graph in prose. `TestRolesMatchDocs`
+[[% if feature_example %]]- The `example` feature (`github.com/andrewmyhre/go-web-base/features/example`),
+  listed in `Features` in `main.go` and granted to `Contributor`. It serves
+  `GET /example/hello` and reads `[[ env_prefix ]]_EXAMPLE_GREETING` (see
+  `deploy/dev/api.yaml`). Its grant is not in `docs/roles.md`. Turn it off
+  with `uvx copier@9.19.1 update -d feature_example=false`.
+[[% endif %]]- `docs/roles.md`: the same graph in prose. `TestRolesMatchDocs`
   (`roles_test.go`) fails until it agrees with `roles.go`.
 - `docs/logging.md` and `deploy/grafana/`: the logging queries and the Grafana
   dashboard for this project's namespace.

@@ -15,7 +15,24 @@ export interface paths {
         put?: never;
         /** End the session */
         post: operations["auth-logout"];
-        delete?: never;
+[[% if feature_example %]]        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/example/hello": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return the example greeting */
+        get: operations["get-example-hello"];
+        put?: never;
+        post?: never;
+[[% endif %]]        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -107,7 +124,14 @@ export interface components {
              */
             status: string;
         };
-        MeOutputBody: {
+[[% if feature_example %]]        HelloOutputBody: {
+            /**
+             * @description The configured greeting.
+             * @example Hello from the example feature
+             */
+            greeting: string;
+        };
+[[% endif %]]        MeOutputBody: {
             /** @description Avatar URL. */
             avatar: string;
             /** @description Email, shown only and never matched on. Empty unless Google says it is verified. */
@@ -150,7 +174,36 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+[[% if feature_example %]]            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
             };
+        };
+    };
+    "get-example-hello": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HelloOutputBody"];
+                };
+[[% endif %]]            };
             /** @description Error */
             default: {
                 headers: {

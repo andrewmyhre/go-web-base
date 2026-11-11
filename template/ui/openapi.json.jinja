@@ -89,7 +89,23 @@
         ],
         "type": "object"
       },
-      "MeOutputBody": {
+[[% if feature_example %]]      "HelloOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "greeting": {
+            "description": "The configured greeting.",
+            "examples": [
+              "Hello from the example feature"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "greeting"
+        ],
+        "type": "object"
+      },
+[[% endif %]]      "MeOutputBody": {
         "additionalProperties": false,
         "properties": {
           "avatar": {
@@ -183,7 +199,38 @@
         ]
       }
     },
-    "/health": {
+[[% if feature_example %]]    "/example/hello": {
+      "get": {
+        "operationId": "get-example-hello",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelloOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Return the example greeting",
+        "tags": [
+          "example"
+        ]
+      }
+    },
+[[% endif %]]    "/health": {
       "get": {
         "operationId": "get-health",
         "responses": {

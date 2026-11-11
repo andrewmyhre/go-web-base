@@ -5,7 +5,8 @@ package main
 
 import (
 	"github.com/andrewmyhre/go-web-base/core/app"
-
+[[% if feature_example %]]	"github.com/andrewmyhre/go-web-base/features/example"
+[[% endif %]]
 	project "[[ go_module ]]"
 )
 
@@ -23,18 +24,16 @@ func options() app.Options {
 		Resources: project.Resources(),
 		// Features are optional modules, each its own Go module. To add one,
 		// go get it, import it, and list it here, naming the role it grants to
-		// where it asks for one. The example feature in go-web-base adds
-		// GET /example/hello for the "Contributor" role:
-		//
-		//	import "github.com/andrewmyhre/go-web-base/features/example"
-		//
-		//	Features: []app.Feature{example.New("Contributor")},
-		//
-		// Each feature's migrations run in this order, after core's and
-		// before this project's own. Then regenerate ui/openapi.json
-		// (pnpm run generate in ui/), since a feature's routes are in it.
-		Features: nil,
-		// Migrations holds this project's own goose migrations (*.sql in an
+		// where it asks for one. Each feature's migrations run in this order,
+		// after core's and before this project's own. Then regenerate
+		// ui/openapi.json (pnpm run generate in ui/), since a feature's routes
+		// are in it. The Copier questions feature_<name> render this glue.
+[[% if feature_example %]]		//
+		// The example feature adds GET /example/hello for "Contributor" (and so
+		// for every role that inherits it).
+		Features: []app.Feature{example.New("Contributor")},
+[[% else %]]		Features: nil,
+[[% endif %]]		// Migrations holds this project's own goose migrations (*.sql in an
 		// embed.FS, passed through fs.Sub). They run last, in their own version
 		// table. Leave it unset until the project has a table of its own.
 		//
