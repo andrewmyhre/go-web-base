@@ -1,0 +1,29 @@
+# Dependabot keeps the Go dependencies current. It is on by default for any
+# GitHub repository that holds this file on its default branch.
+#
+# Go: the go-web-base modules (core and any feature) share one release number
+# and must move together, so they are one grouped PR. Everything else is a
+# second grouped PR. The limit keeps the queue small.
+#
+# What is deliberately not here:
+# - The UI package @andrewmyhre/web-base-ui is pinned by a release URL in
+#   ui/package.json, which Dependabot cannot bump. UI package and template
+#   changes arrive through `uvx copier@9.19.1 update`.
+# - npm for the rest of ui/. Its versions and ui/pnpm-lock.yaml come from the
+#   template, so a Dependabot bump would collide with the next `copier update`
+#   merge. Take UI dependency updates through `copier update`. If you decide to
+#   own them yourself, add an npm entry with directory "/ui".
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      go-web-base:
+        patterns:
+          - "github.com/andrewmyhre/go-web-base/*"
+      go-dependencies:
+        patterns:
+          - "*"

@@ -132,6 +132,13 @@ are your answers.
    kubectl -n <dev_namespace> logs deploy/<slug>-api | grep '"decision":"deny"'
    ```
 
+7. **Dependabot.** The generated `.github/dependabot.yml` opens weekly,
+   grouped PRs for Go modules once it is on the repo's default branch. No
+   setting is needed for these version updates; optionally enable Dependabot
+   alerts and security updates under Settings, Code security. It does not
+   touch `ui/`: UI changes come from `copier update`. See
+   [docs/consuming.md](docs/consuming.md#keeping-up-to-date).
+
 ## Developing the template
 
 - `copier.yml` holds the questions. `template/` is what gets rendered.
@@ -164,8 +171,8 @@ The script tags and pushes `core/v0.3.0`, waits until `proxy.golang.org`
 serves it, then builds, tests and packs `packages/web-base-ui` at `0.3.0`
 (`pnpm pack`, from a copy, so `main` stays at version `0.0.0`) and creates the
 GitHub release `ui/v0.3.0` with `andrewmyhre-web-base-ui-0.3.0.tgz` attached,
-using your `gh` login. No registry or token is involved: generated projects
-depend on the tarball's download URL,
+using your `gh` login. No registry is involved, and the repository is public
+so consumers need no GitHub credential: generated projects depend on the tarball's download URL,
 `https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.3.0/andrewmyhre-web-base-ui-0.3.0.tgz`.
 On a `release/v0.3.0` branch it then makes `features/example/go.mod` require
 that core (the in-repo `replace` stays), commits that, tags and pushes
@@ -214,6 +221,8 @@ same release. Each feature module states the core it requires in its own
   install, since the pinned release URL may not exist yet), so the template is
   tested against the UI package in the same commit, then runs `check:client`,
   `test`, `check` and `build`;
+- checks that `.github/dependabot.yml` is rendered, parses as YAML and watches
+  `gomod`, and that `.gitignore` lists `go.work`;
 - does all of that twice, in parallel: `sample/` with every feature off (the
   defaults) and `sample-features/` with every feature on (steps `go` and `ui`,
   and `go-features` and `ui-features`). With a feature on, the Go step also
