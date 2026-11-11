@@ -1,0 +1,161 @@
+// Package config holds the configuration for the API server.
+//
+// Configuration is read with Viper. Every key can be set from the
+// environment with the app's prefix (for prefix MYAPP: MYAPP_ADDR,
+// MYAPP_LOG_LEVEL, MYAPP_DATABASE_DSN) or from a command-line flag bound with
+// BindFlags. The prefix is supplied by the app, never fixed here. A
+// flag that was set on the command line wins over the environment, which
+// wins over the default.
+package config
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+// Configuration keys. The environment variable for a key is the app's env
+// prefix, an underscore and the key in upper case, e.g. MYAPP_LOG_LEVEL.
+const (
+	// AddrKey selects the address the HTTP server listens on.
+	AddrKey = "addr"
+	// LogLevelKey selects the log level (debug, info, warn, error).
+	LogLevelKey = "log_level"
+	// RedisAddrKey selects the Redis server address used for sessions.
+	RedisAddrKey = "redis_addr"
+	// RedisPasswordKey selects the Redis password (empty when the server
+	// requires no authentication). It is read from <PREFIX>_REDIS_PASSWORD only,
+	// never a flag, so it does not appear in process listings or pod args.
+	RedisPasswordKey = "redis_password"
+	// DatabaseDSNKey is the Postgres connection string.
+	DatabaseDSNKey = "database_dsn"
+	// AdminSubKey is the OIDC subject (the Google account ID, never an email)
+	// of the user to bootstrap as the global Admin. When it is
+	// set, that user is bound to the Admin role in the global domain.
+	AdminSubKey = "admin_sub"
+	// GoogleClientIDKey is the Google OAuth client ID used for sign-in. It is
+	// public by design and may also be set with the --google-client-id flag.
+	GoogleClientIDKey = "google_client_id"
+	// GoogleClientSecretKey is the Google OAuth client secret. It is read
+	// from <PREFIX>_GOOGLE_CLIENT_SECRET only, never a flag, so it does not
+	// appear in process listings or pod args.
+	GoogleClientSecretKey = "google_client_secret"
+	// GoogleRedirectURIKey is the absolute URI Google must redirect the
+	// browser to after consent, registered with the Google OAuth client. It
+	// is required when sign-in is enabled, and never derived from a
+	// request's Host header.
+	GoogleRedirectURIKey = "google_redirect_uri"
+)
+
+// Config is the runtime configuration of the API server.
+type Config struct {
+	// Addr is the address the HTTP server listens on, e.g. ":8080".
+	Addr string `mapstructure:"addr"`
+	// LogLevel is the log level: debug, info, warn or error.
+	LogLevel string `mapstructure:"log_level"`
+	// RedisAddr is the Redis server address, e.g. "127.0.0.1:6379". It is
+	// empty when the server does not use Redis.
+	RedisAddr string `mapstructure:"redis_addr"`
+	// RedisPassword is the Redis password. It is empty when the server
+	// requires no authentication.
+	RedisPassword string `mapstructure:"redis_password"`
+	// DatabaseDSN is the Postgres connection string; empty means the
+	// server runs without a database.
+	DatabaseDSN string `mapstructure:"database_dsn"`
+	// AdminSub is the user to bootstrap as the global Admin; empty to skip
+	// the bootstrap.
+	AdminSub string `mapstructure:"admin_sub"`
+	// GoogleClientID is the Google OAuth client ID. Empty means sign-in is
+	// disabled.
+	GoogleClientID string `mapstructure:"google_client_id"`
+	// GoogleClientSecret is the Google OAuth client secret.
+	GoogleClientSecret string `mapstructure:"google_client_secret"`
+	// GoogleRedirectURI is the absolute callback URI registered with the
+	// Google OAuth client.
+	GoogleRedirectURI string `mapstructure:"google_redirect_uri"`
+}
+
+// Default returns the default configuration.
+func Default() Config {
+	return Config{
+		Addr:     ":8080",
+		LogLevel: "info",
+	}
+}
+
+// NewViper returns a Viper instance holding the defaults and reading
+// environment variables with the given prefix (for example "MYAPP", which
+// reads MYAPP_ADDR).
+func NewViper(envPrefix string) *viper.Viper {
+	v := viper.New()
+	d := Default()
+	v.SetDefault(AddrKey, d.Addr)
+	v.SetDefault(LogLevelKey, d.LogLevel)
+	v.SetDefault(RedisAddrKey, d.RedisAddr)
+	v.SetDefault(RedisPasswordKey, d.RedisPassword)
+	v.SetDefault(DatabaseDSNKey, d.DatabaseDSN)
+	v.SetDefault(AdminSubKey, d.AdminSub)
+	v.SetDefault(GoogleClientIDKey, d.GoogleClientID)
+	v.SetDefault(GoogleClientSecretKey, d.GoogleClientSecret)
+	v.SetDefault(GoogleRedirectURIKey, d.GoogleRedirectURI)
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	v.AutomaticEnv()
+	return v
+}
+
+// BindFlags defines the --addr, --log-level and --database-dsn flags on fs
+// and binds them to v, so a flag set on the command line overrides the
+// environment.
+func BindFlags(fs *pflag.FlagSet, v *viper.Viper, envPrefix string) error {
+	d := Default()
+	fs.String("addr", d.Addr, "address the HTTP server listens on (env "+envPrefix+"_ADDR)")
+	fs.String("log-level", d.LogLevel, "log level: debug, info, warn or error (env "+envPrefix+"_LOG_LEVEL)")
+	fs.String("redis-addr", d.RedisAddr, "Redis server address (env "+envPrefix+"_REDIS_ADDR)")
+	fs.String("database-dsn", d.DatabaseDSN, "Postgres connection string; empty to run without a database (env "+envPrefix+"_DATABASE_DSN)")
+	fs.String("admin-sub", d.AdminSub, "OIDC sub (not email) of the user to bootstrap as the global Admin; empty to skip (env "+envPrefix+"_ADMIN_SUB)")
+	fs.String("google-client-id", d.GoogleClientID, "Google OAuth client ID; empty to disable sign-in (env "+envPrefix+"_GOOGLE_CLIENT_ID)")
+	fs.String("google-redirect-uri", d.GoogleRedirectURI, "absolute Google OAuth callback URI registered with the client (env "+envPrefix+"_GOOGLE_REDIRECT_URI)")
+	if err := v.BindPFlag(AddrKey, fs.Lookup("addr")); err != nil {
+		return fmt.Errorf("bind --addr: %w", err)
+	}
+	if err := v.BindPFlag(LogLevelKey, fs.Lookup("log-level")); err != nil {
+		return fmt.Errorf("bind --log-level: %w", err)
+	}
+	if err := v.BindPFlag(RedisAddrKey, fs.Lookup("redis-addr")); err != nil {
+		return fmt.Errorf("bind --redis-addr: %w", err)
+	}
+	if err := v.BindPFlag(DatabaseDSNKey, fs.Lookup("database-dsn")); err != nil {
+		return fmt.Errorf("bind --database-dsn: %w", err)
+	}
+	if err := v.BindPFlag(AdminSubKey, fs.Lookup("admin-sub")); err != nil {
+		return fmt.Errorf("bind --admin-sub: %w", err)
+	}
+	if err := v.BindPFlag(GoogleClientIDKey, fs.Lookup("google-client-id")); err != nil {
+		return fmt.Errorf("bind --google-client-id: %w", err)
+	}
+	if err := v.BindPFlag(GoogleRedirectURIKey, fs.Lookup("google-redirect-uri")); err != nil {
+		return fmt.Errorf("bind --google-redirect-uri: %w", err)
+	}
+	return nil
+}
+
+// Load builds the configuration from v.
+func Load(v *viper.Viper) (Config, error) {
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return Config{}, fmt.Errorf("load config: %w", err)
+	}
+	cfg.Addr = strings.TrimSpace(cfg.Addr)
+	cfg.LogLevel = strings.TrimSpace(cfg.LogLevel)
+	cfg.RedisAddr = strings.TrimSpace(cfg.RedisAddr)
+	cfg.RedisPassword = strings.TrimSpace(cfg.RedisPassword)
+	cfg.DatabaseDSN = strings.TrimSpace(cfg.DatabaseDSN)
+	cfg.AdminSub = strings.TrimSpace(cfg.AdminSub)
+	cfg.GoogleClientID = strings.TrimSpace(cfg.GoogleClientID)
+	cfg.GoogleClientSecret = strings.TrimSpace(cfg.GoogleClientSecret)
+	cfg.GoogleRedirectURI = strings.TrimSpace(cfg.GoogleRedirectURI)
+	return cfg, nil
+}

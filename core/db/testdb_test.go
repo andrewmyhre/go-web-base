@@ -1,0 +1,151 @@
+package db
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"os"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+)
+
+// testSchema creates a uniquely named, empty schema in the test Postgres
+// and returns a pool config whose connections use it as their only
+// search_path entry, so migrations, goose's version table and every query
+// stay inside it. The schema is dropped CASCADE when the test ends.
+//
+// A schema per test is what keeps concurrent runs (two CI pipelines, CI and
+// a local check, parallel packages) from seeing or wiping each other's
+// rows: the test services are shared and have no persistent volumes.
+//
+// CORE_TEST_DATABASE_URL must be set; unset fails the test rather than
+// skipping it, unless CORE_SKIP_SERVICE_TESTS=1 asks for the skip
+// (see core/README.md).
+func testSchema(t *testing.T) *pgxpool.Config {
+	t.Helper()
+	ctx := context.Background()
+
+	if os.Getenv("CORE_SKIP_SERVICE_TESTS") == "1" {
+		t.Skip("CORE_SKIP_SERVICE_TESTS=1: skipping a test that needs the test Postgres")
+	}
+	dsn := os.Getenv("CORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("CORE_TEST_DATABASE_URL is not set; db tests need the test Postgres (see core/README.md)")
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("random schema name: %v", err)
+	}
+	schema := "t_" + hex.EncodeToString(buf)
+
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to test database: %v", err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	ident := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+ident); err != nil {
+		t.Fatalf("create schema %s: %v", schema, err)
+	}
+	t.Cleanup(func() {
+		conn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Errorf("connect to drop schema %s: %v", schema, err)
+			return
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		if _, err := conn.Exec(context.Background(), "DROP SCHEMA "+ident+" CASCADE"); err != nil {
+			t.Errorf("drop schema %s: %v", schema, err)
+		}
+	})
+
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse CORE_TEST_DATABASE_URL: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	return cfg
+}
+
+// testPool opens a pool on cfg and closes it when the test ends. Cleanups
+// run last-in first-out, so a pool opened after testSchema closes before
+// its schema is dropped.
+func testPool(t *testing.T, cfg *pgxpool.Config) *pgxpool.Pool {
+	t.Helper()
+	pool, err := NewWithConfig(context.Background(), cfg.Copy())
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// schemaName is the schema cfg's connections use.
+func schemaName(cfg *pgxpool.Config) string {
+	return cfg.ConnConfig.RuntimeParams["search_path"]
+}
+
+// tableExists reports whether schema.table exists.
+func tableExists(t *testing.T, pool *pgxpool.Pool, schema, table string) bool {
+	t.Helper()
+	var ok bool
+	if err := pool.QueryRow(context.Background(),
+		"SELECT to_regclass($1) IS NOT NULL", pgx.Identifier{schema, table}.Sanitize()).Scan(&ok); err != nil {
+		t.Fatalf("look up %s.%s: %v", schema, table, err)
+	}
+	return ok
+}
+
+func TestMigrateEmptySchema(t *testing.T) {
+	ctx := context.Background()
+	cfg := testSchema(t)
+	schema := schemaName(cfg)
+	pool := testPool(t, cfg)
+
+	var relations int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1",
+		schema).Scan(&relations); err != nil {
+		t.Fatalf("count relations: %v", err)
+	}
+	if relations != 0 {
+		t.Fatalf("schema %s has %d relations before migrating, want an empty schema", schema, relations)
+	}
+
+	if err := MigrateWithConfig(ctx, cfg.ConnConfig); err != nil {
+		t.Fatalf("migrate empty schema: %v", err)
+	}
+	for _, table := range []string{"casbin_rule", "goose_db_version"} {
+		if !tableExists(t, pool, schema, table) {
+			t.Errorf("%s.%s missing after Migrate", schema, table)
+		}
+	}
+	// Idempotent: a second run applies nothing and does not fail.
+	if err := MigrateWithConfig(ctx, cfg.ConnConfig); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+
+	// The Down migration undoes the Up one.
+	provider, err := newProvider(stdlibDB(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 0); err != nil {
+		t.Fatalf("migrate down: %v", err)
+	}
+	if tableExists(t, pool, schema, "casbin_rule") {
+		t.Errorf("%s.casbin_rule still exists after migrating down", schema)
+	}
+}
+
+// stdlibDB opens a database/sql handle on cfg, closed when the test ends.
+func stdlibDB(t *testing.T, cfg *pgxpool.Config) *sql.DB {
+	t.Helper()
+	sqlDB := stdlib.OpenDB(*cfg.ConnConfig.Copy())
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return sqlDB
+}

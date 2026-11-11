@@ -1,0 +1,135 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/andrewmyhre/go-web-base/core/redis"
+)
+
+// testSub and testSessionID are the session newMemStore starts with.
+const (
+	testSub       = "100000000000000000001"
+	testSessionID = "0000000000000000000000000000000000000000000000000000000000000001"
+)
+
+// memStore is an in-memory SessionStore. Its ids have the shape of
+// redis.Store ids. fail makes every call return errStoreDown.
+type memStore struct {
+	mu   sync.Mutex
+	data map[string]map[string]string
+	ttl  map[string]time.Duration
+	n    int
+	fail bool
+}
+
+var errStoreDown = errors.New("store is down")
+
+func newMemStore() *memStore {
+	return &memStore{
+		data: map[string]map[string]string{
+			testSessionID: {sessionSub: testSub, sessionName: "Test User", sessionEmail: "test@example.com", sessionAvatar: "https://example.com/a.png"},
+		},
+		ttl: map[string]time.Duration{testSessionID: SessionTTL},
+	}
+}
+
+func (m *memStore) Create(_ context.Context, ttl time.Duration, data map[string]string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return "", errStoreDown
+	}
+	m.n++
+	id, err := randomHex(32)
+	if err != nil {
+		return "", err
+	}
+	m.data[id] = data
+	m.ttl[id] = ttl
+	return id, nil
+}
+
+func (m *memStore) Get(_ context.Context, id string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return nil, errStoreDown
+	}
+	d, ok := m.data[id]
+	if !ok {
+		return nil, redis.ErrNotFound
+	}
+	return d, nil
+}
+
+func (m *memStore) Take(_ context.Context, id string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return nil, errStoreDown
+	}
+	d, ok := m.data[id]
+	if !ok {
+		return nil, redis.ErrNotFound
+	}
+	delete(m.data, id)
+	return d, nil
+}
+
+func (m *memStore) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return errStoreDown
+	}
+	delete(m.data, id)
+	return nil
+}
+
+func (m *memStore) has(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.data[id]
+	return ok
+}
+
+// allowAll is an Authorizer that allows every check.
+type allowAll struct{}
+
+func (allowAll) Authorize(string, string, string, string) (bool, error) { return true, nil }
+
+// grants is an Authorizer that allows exactly the "sub|object|action"
+// entries it holds, in any domain, and returns err when it is set.
+type grants struct {
+	allowed map[string]bool
+	err     error
+	calls   []string
+}
+
+func (g *grants) Authorize(sub, domain, object, action string) (bool, error) {
+	g.calls = append(g.calls, strings.Join([]string{sub, domain, object, action}, "|"))
+	if g.err != nil {
+		return false, g.err
+	}
+	return g.allowed[sub+"|"+object+"|"+action], nil
+}
+
+// bindings is a RoleBindings over a set of bound subjects. It returns err
+// when that is set.
+type bindings struct {
+	bound map[string]bool
+	err   error
+	calls []string
+}
+
+func (b *bindings) HasRoleBinding(sub string) (bool, error) {
+	b.calls = append(b.calls, sub)
+	if b.err != nil {
+		return false, b.err
+	}
+	return b.bound[sub], nil
+}
