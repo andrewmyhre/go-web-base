@@ -2,8 +2,8 @@
 // cobra root with the serve and openapi commands, configuration, the Redis
 // and Postgres connections, migrations, the Casbin enforcer and admin
 // bootstrap, the built-in routes (health, /me, Google sign-in, logout) and
-// serving. An app's main calls Main with its Options and, optionally,
-// registers its own routes through Options.Routes.
+// serving. An app's main calls Main with its Options: its role graph, its
+// own routes and migrations, and the optional Features it installs.
 //
 //	myapp serve [--addr :8080] [--log-level info]
 //	myapp openapi > ui/openapi.json
@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,6 +54,24 @@ type Options struct {
 	// the keys my_app:session: and my_app:signin:. It must be a
 	// cookie-safe token (letters, digits, underscore). Required.
 	CookiePrefix string
+	// Roles is the app's role graph: the roles, what each inherits and the
+	// permissions it grants, as "Resource: Verb" strings (see db.RoleDef).
+	// Core ships none. It must define db.AdminRole, which the admin
+	// bootstrap binds, and every permission must name a resource the app or
+	// a feature registered, or startup fails. Features add grants to these
+	// roles with Installer.Grant. Required.
+	Roles []db.RoleDef
+	// Resources are the resources the app's routes and roles name, with any
+	// verbs beyond Read, Create, Patch and Delete. Features register their
+	// own through Installer.Resource.
+	Resources []server.ResourceDef
+	// Migrations holds the app's own goose migrations (*.sql at the root of
+	// the FS; use fs.Sub on an embed.FS). They run last, after core's and
+	// the features', in the version table goose_app_version. Optional.
+	Migrations fs.FS
+	// Features are the optional modules this app installs, in order. The
+	// order is the order their migrations run and their routes register.
+	Features []Feature
 	// Routes registers the app's own routes. It is optional, and runs after
 	// the built-ins, with the router already holding the session store and
 	// authorizer when they are configured. Every route must go through
@@ -77,6 +96,9 @@ func (o Options) validate() (Options, error) {
 	if o.Version == "" {
 		o.Version = "0.0.0"
 	}
+	if len(o.Roles) == 0 {
+		return o, errors.New("app.Options.Roles is required: core ships no roles, the app supplies its role graph")
+	}
 	return o, nil
 }
 
@@ -100,20 +122,26 @@ func NewRootCmd(o Options) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
-	root.AddCommand(newServeCmd(o), newOpenAPICmd(o))
+	// Features are installed now, before cobra parses a flag, because their
+	// settings become flags of the serve command. A failure is kept and
+	// returned by every subcommand.
+	inst, err := newInstallation(o)
+	root.AddCommand(newServeCmd(o, inst, err), newOpenAPICmd(inst, err))
 	return root
 }
 
-func newServeCmd(o Options) *cobra.Command {
+func newServeCmd(o Options, inst *installation, instErr error) *cobra.Command {
 	v := config.NewViper(o.EnvPrefix)
+	if inst != nil {
+		v = inst.v
+	}
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			o, err := o.validate()
-			if err != nil {
-				return err
+			if instErr != nil {
+				return instErr
 			}
 			cfg, err := config.Load(v)
 			if err != nil {
@@ -121,11 +149,16 @@ func newServeCmd(o Options) *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return serve(ctx, o, cfg)
+			return serve(ctx, inst, cfg)
 		},
 	}
 	if err := config.BindFlags(cmd.Flags(), v, o.EnvPrefix); err != nil {
 		panic(err) // a programming error: the flags are defined just above
+	}
+	if inst != nil {
+		if err := inst.addFlags(cmd.Flags()); err != nil {
+			panic(err) // Install declared the flags; a clash was refused there
+		}
 	}
 	return cmd
 }
@@ -133,13 +166,16 @@ func newServeCmd(o Options) *cobra.Command {
 // newOpenAPICmd prints the OpenAPI document of the full API, every route
 // registered, without connecting to anything. An app commits this output
 // (ui/openapi.json) and generates its UI's typed client from it.
-func newOpenAPICmd(o Options) *cobra.Command {
+func newOpenAPICmd(inst *installation, instErr error) *cobra.Command {
 	return &cobra.Command{
 		Use:   "openapi",
 		Short: "Print the API's OpenAPI document as JSON",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			spec, err := OpenAPISpec(o)
+			if instErr != nil {
+				return instErr
+			}
+			spec, err := openAPISpec(inst)
 			if err != nil {
 				return err
 			}
@@ -157,10 +193,15 @@ func newOpenAPICmd(o Options) *cobra.Command {
 // logout is an operation, so the router gets a stand-in Auth that is
 // never called either. An app tests that its committed spec equals this.
 func OpenAPISpec(o Options) ([]byte, error) {
-	o, err := o.validate()
+	inst, err := newInstallation(o)
 	if err != nil {
 		return nil, err
 	}
+	return openAPISpec(inst)
+}
+
+func openAPISpec(inst *installation) ([]byte, error) {
+	o := inst.o
 	google, err := server.NewGoogle(server.GoogleConfig{
 		ClientID: "spec-only", ClientSecret: "spec-only", RedirectURL: "https://spec.invalid" + server.AuthCallbackPath,
 	})
@@ -169,7 +210,7 @@ func OpenAPISpec(o Options) ([]byte, error) {
 	}
 	store := specOnlyStore{}
 	auth := server.NewAuth(google, store, store, specOnlyAuthorizer{}, nil, "spec-only", o.names())
-	router, err := newRouter(o, Deps{Sessions: store, Authorizer: specOnlyAuthorizer{}, Auth: auth})
+	router, err := newRouter(inst, Deps{Sessions: store, Authorizer: specOnlyAuthorizer{}, Auth: auth})
 	if err != nil {
 		return nil, err
 	}
@@ -243,14 +284,20 @@ type Deps struct {
 }
 
 // newRouter registers every operation the API serves: the built-ins, then
-// the app's own through o.Routes. Each must declare the permission a caller
+// the features' in their order, then the app's own through o.Routes. Each must declare the permission a caller
 // needs to invoke it, or server.Public; one without is refused, and the
 // server does not start. /health is Public so probes need no credentials.
 // /me is Authenticated: any signed-in user may read their own account.
-func newRouter(o Options, d Deps) (*server.Router, error) {
-	router := server.NewRouter(o.Name, o.Version)
+func newRouter(inst *installation, d Deps) (*server.Router, error) {
+	o := inst.o
+	router := server.NewRouter(o.Name, o.Version).WithResources(inst.newRouterResources())
 	if err := registerBuiltins(router, o, d); err != nil {
 		return nil, err
+	}
+	for _, h := range inst.routes {
+		if err := h.fn(router, d); err != nil {
+			return nil, fmt.Errorf("register %s routes: %w", h.feature, err)
+		}
 	}
 	if o.Routes != nil {
 		if err := o.Routes(router, d); err != nil {
@@ -318,21 +365,22 @@ func registerBuiltins(router *server.Router, o Options, d Deps) error {
 	}, d.Auth.Logout)
 }
 
-func serve(ctx context.Context, o Options, cfg config.Config) error {
+func serve(ctx context.Context, inst *installation, cfg config.Config) error {
+	o := inst.o
 	log, err := logger.New(o.Name, cfg.LogLevel, os.Stderr)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = log.Sync() }()
 
-	d, cleanup, err := connect(ctx, o, cfg, log)
+	d, cleanup, err := connect(ctx, inst, cfg, log)
 	defer cleanup()
 	if err != nil {
 		log.Error("start", zap.Error(err))
 		return err
 	}
 	d.Log = log
-	router, err := newRouter(o, d)
+	router, err := newRouter(inst, d)
 	if err != nil {
 		return fmt.Errorf("register routes: %w", err)
 	}
@@ -348,7 +396,8 @@ func serve(ctx context.Context, o Options, cfg config.Config) error {
 // and Google sign-in. Sign-in needs Redis for its sessions and Postgres for
 // the role bindings it checks, so a client id without either is an error.
 // cleanup closes whatever was opened, even on error.
-func connect(ctx context.Context, o Options, cfg config.Config, log *zap.Logger) (Deps, func(), error) {
+func connect(ctx context.Context, inst *installation, cfg config.Config, log *zap.Logger) (Deps, func(), error) {
+	o := inst.o
 	var (
 		d       Deps
 		closers []func()
@@ -385,9 +434,11 @@ func connect(ctx context.Context, o Options, cfg config.Config, log *zap.Logger)
 	}
 
 	if cfg.DatabaseDSN != "" {
-		// Migrations run at startup, before anything reads the schema. goose
-		// records what it applied, so a restart applies nothing.
-		if err := db.Migrate(ctx, cfg.DatabaseDSN); err != nil {
+		// Migrations run at startup, before anything reads the schema: core's,
+		// then each feature's in order, then the app's, each in its own
+		// version table. goose records what it applied, so a restart
+		// applies nothing.
+		if err := db.Migrate(ctx, cfg.DatabaseDSN, inst.migrations...); err != nil {
 			return d, cleanup, err
 		}
 		pool, err := db.New(ctx, cfg.DatabaseDSN)
@@ -395,7 +446,7 @@ func connect(ctx context.Context, o Options, cfg config.Config, log *zap.Logger)
 			return d, cleanup, err
 		}
 		closers = append(closers, pool.Close)
-		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub)
+		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub, inst.roles)
 		if err != nil {
 			return d, cleanup, err
 		}

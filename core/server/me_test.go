@@ -27,7 +27,7 @@ func (r *roleReader) RoleBindingsOf(sub string) ([]db.Binding, error) {
 
 func meHandler(t *testing.T, roles RoleReader) http.Handler {
 	t.Helper()
-	r := NewRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(roles, nil)); err != nil {
 		t.Fatal(err)
 	}

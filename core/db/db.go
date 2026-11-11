@@ -11,7 +11,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -49,46 +48,69 @@ func NewWithConfig(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, err
 	return pool, nil
 }
 
-// Migrate applies every goose migration in migrations/ to the database at
-// dsn. It is idempotent: goose records the applied versions in its own
-// goose_db_version table and re-running applies nothing.
-func Migrate(ctx context.Context, dsn string) error {
+// CoreTable is the goose version table of core's own migrations. It is the
+// table goose uses by default, so a database migrated by an earlier core,
+// which had only these migrations, is already recorded in it and applies
+// nothing again.
+const CoreTable = "goose_db_version"
+
+// Migration is one module's goose migrations: the app's, a feature's, or
+// core's own. Each module records what it applied in its own version table,
+// so module version numbers never collide.
+type Migration struct {
+	// Name is the module, for errors: "core", a feature's name, or "app".
+	Name string
+	// Table is the goose version table. Use ModuleTable for everything but
+	// core's own.
+	Table string
+	// FS holds the module's *.sql goose files at its root (use fs.Sub on an
+	// embed.FS to get there).
+	FS fs.FS
+}
+
+// ModuleTable is the version table name for a feature or the app:
+// "goose_<name>_version". name must be a lower-case identifier (letters and
+// digits), which app.Installer guarantees.
+func ModuleTable(name string) string { return "goose_" + name + "_version" }
+
+// CoreMigration is core's own migration set (the Casbin table).
+func CoreMigration() Migration {
+	fsys, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		panic(err) // the embedded directory exists at build time
+	}
+	return Migration{Name: "core", Table: CoreTable, FS: fsys}
+}
+
+// Migrate applies core's migrations and then each of mods, in order, to the
+// database at dsn. It is idempotent: goose records the applied versions in
+// each module's own version table and re-running applies nothing.
+func Migrate(ctx context.Context, dsn string, mods ...Migration) error {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return fmt.Errorf("parse database dsn: %w", err)
 	}
-	return MigrateWithConfig(ctx, cfg)
+	return MigrateWithConfig(ctx, cfg, mods...)
 }
 
 // MigrateWithConfig is Migrate for an already parsed connection config.
-// The migrations and goose's version table land in the first schema of the
+// The migrations and the version tables land in the first schema of the
 // connection's search_path, so a config whose RuntimeParams set
 // search_path migrates that schema.
-func MigrateWithConfig(ctx context.Context, cfg *pgx.ConnConfig) error {
+func MigrateWithConfig(ctx context.Context, cfg *pgx.ConnConfig, mods ...Migration) error {
 	sqlDB := stdlib.OpenDB(*cfg)
 	defer func() { _ = sqlDB.Close() }()
 	if err := sqlDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping database: %w", err)
 	}
-	provider, err := newProvider(sqlDB)
-	if err != nil {
-		return err
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
+	for _, m := range append([]Migration{CoreMigration()}, mods...) {
+		provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, m.FS, goose.WithTableName(m.Table))
+		if err != nil {
+			return fmt.Errorf("%s migrations: goose provider: %w", m.Name, err)
+		}
+		if _, err := provider.Up(ctx); err != nil {
+			return fmt.Errorf("apply %s migrations: %w", m.Name, err)
+		}
 	}
 	return nil
-}
-
-// newProvider returns a goose provider over the embedded migrations.
-func newProvider(sqlDB *sql.DB) (*goose.Provider, error) {
-	fsys, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		return nil, fmt.Errorf("embed migrations: %w", err)
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys)
-	if err != nil {
-		return nil, fmt.Errorf("goose provider: %w", err)
-	}
-	return provider, nil
 }

@@ -74,7 +74,7 @@ func testEnforcer(t *testing.T, adminSub string) *casbin.Enforcer {
 		t.Fatalf("open pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	e, err := db.NewEnforcer(ctx, pool, adminSub)
+	e, err := db.NewEnforcer(ctx, pool, adminSub, integrationRoles)
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
 	}
@@ -137,7 +137,7 @@ func newIntegrationRig(t *testing.T) *integrationRig {
 	authz := CasbinAuthorizer{Enforcer: rig.enforcer}
 	log := bufferLogger(rig.logs)
 	auth := NewAuth(g, rig.sessions, attempts, authz, log, fakeClientSecret, testNames)
-	r := NewRouter("t", "0").WithAuth(rig.sessions, authz, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(rig.sessions, authz, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(authz, log)); err != nil {
 		t.Fatal(err)
 	}
@@ -349,4 +349,11 @@ func TestIntegrationMeRolesFromBindings(t *testing.T) {
 			t.Errorf("GET /me as %s roles = %s, want %s", who, got, want)
 		}
 	}
+}
+
+// integrationRoles is a small role graph for these tests; core ships none.
+var integrationRoles = []db.RoleDef{
+	{Name: "Contributor", Permissions: []string{"Projects: Read"}},
+	{Name: "Manager", Inherits: []string{"Contributor"}, Permissions: []string{"Projects: Create", "Projects: Patch", "Projects: Delete"}},
+	{Name: db.AdminRole, Inherits: []string{"Manager"}, Permissions: []string{"Workflows: Create"}},
 }

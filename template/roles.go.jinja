@@ -1,0 +1,92 @@
+// Package [[ ident ]] holds [[ project_name ]]'s role graph. Core ships no roles or
+// resources: this project defines them, and passes them to core in
+// cmd/[[ project_slug ]]/main.go. docs/roles.md describes the same graph in prose,
+// and TestRolesMatchDocs fails until the two agree.
+package [[ ident ]]
+
+import (
+	"github.com/andrewmyhre/go-web-base/core/db"
+	"github.com/andrewmyhre/go-web-base/core/server"
+)
+
+// Resources are the kinds of object a permission applies to. Every route
+// declares a permission on one of these (or server.Public or
+// server.Authenticated), and every permission in Roles names one, or the
+// server refuses to start. Each has the verbs Read, Create, Patch and
+// Delete; Verbs adds more that apply to that resource only. An optional
+// feature registers its own resources and grants them to the roles below.
+func Resources() []server.ResourceDef {
+	return []server.ResourceDef{
+		{Name: "Projects"},
+		{Name: "AgentConversations"},
+		{Name: "AgentMessages"},
+		{Name: "PermissionPrompts", Verbs: []server.Verb{"Answer"}},
+		{Name: "Requests"},
+		{Name: "ProjectFiles"},
+		{Name: "Workflows", Verbs: []server.Verb{"Run"}},
+		{Name: "WorkflowSteps"},
+		{Name: "Secrets"},
+		{Name: "UserInvitation"},
+		{Name: "WorkflowLink"},
+		{Name: "Users"},
+		{Name: "AccessReviews"},
+		{Name: "Providers"},
+	}
+}
+
+// Roles is the role graph: each role, the roles it inherits, and the
+// permissions it grants itself, as "Resource: Verb". A role's effective
+// permissions are the union of its own and everything it inherits. The graph
+// must define db.AdminRole ("Admin"), which the configured admin user is
+// bound to.
+//
+// This is an example. Replace it with your own roles, and keep
+// docs/roles.md in step.
+func Roles() []db.RoleDef {
+	return []db.RoleDef{
+		{
+			Name: "Contributor",
+			Permissions: []string{
+				"Projects: Read",
+				"AgentConversations: Read", "AgentConversations: Create",
+				"AgentMessages: Read", "AgentMessages: Create", "AgentMessages: Patch",
+				"PermissionPrompts: Answer",
+				"Requests: Read", "Requests: Patch",
+				"ProjectFiles: Read", "ProjectFiles: Create", "ProjectFiles: Patch", "ProjectFiles: Delete",
+				"Workflows: Read", "Workflows: Run",
+				"WorkflowSteps: Read",
+			},
+		},
+		{
+			Name:        "Secrets Manager",
+			Permissions: []string{"Secrets: Create", "Secrets: Patch", "Secrets: Delete"},
+		},
+		{
+			Name:        "Project Manager",
+			Inherits:    []string{"Contributor", "Secrets Manager"},
+			Permissions: []string{"UserInvitation: Create", "UserInvitation: Patch", "UserInvitation: Delete"},
+		},
+		{
+			Name: "Workflow Manager",
+			Permissions: []string{
+				"Workflows: Read", "Workflows: Create", "Workflows: Patch", "Workflows: Delete",
+				"WorkflowSteps: Read", "WorkflowSteps: Create", "WorkflowSteps: Patch", "WorkflowSteps: Delete",
+				"WorkflowLink: Create", "WorkflowLink: Delete",
+			},
+		},
+		{
+			Name:        "Manager",
+			Inherits:    []string{"Project Manager"},
+			Permissions: []string{"Projects: Create", "Projects: Patch", "Projects: Delete"},
+		},
+		{
+			Name:     db.AdminRole,
+			Inherits: []string{"Manager", "Secrets Manager", "Workflow Manager"},
+			Permissions: []string{
+				"Users: Read", "Users: Create", "Users: Patch", "Users: Delete",
+				"AccessReviews: Create",
+				"Providers: Read", "Providers: Create", "Providers: Patch", "Providers: Delete",
+			},
+		},
+	}
+}

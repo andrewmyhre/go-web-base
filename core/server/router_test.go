@@ -46,7 +46,7 @@ func op(method, path string, permission Permission) Operation {
 // testSessionID for testSub, and whose authorizer allows everything, so
 // tests of routing itself can serve non-public routes through serve.
 func newTestRouter() *Router {
-	return NewRouter("test", "0.0.0").WithAuth(newMemStore(), allowAll{}, testNames.SessionCookie)
+	return testRouter("test", "0.0.0").WithAuth(newMemStore(), allowAll{}, testNames.SessionCookie)
 }
 
 // serve sends a request carrying the test session's cookie.

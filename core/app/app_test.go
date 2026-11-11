@@ -13,15 +13,30 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/andrewmyhre/go-web-base/core/config"
+	"github.com/andrewmyhre/go-web-base/core/db"
 	"github.com/andrewmyhre/go-web-base/core/redis"
 	"github.com/andrewmyhre/go-web-base/core/server"
 )
 
 // testOpts are arbitrary per-app values: core fixes none.
-var testOpts = Options{Name: "testapp", Version: "1.2.3", EnvPrefix: "TESTAPP", CookiePrefix: "testapp"}
+var testOpts = Options{
+	Name: "testapp", Version: "1.2.3", EnvPrefix: "TESTAPP", CookiePrefix: "testapp",
+	Roles:     []db.RoleDef{{Name: db.AdminRole, Permissions: []string{"Projects: Read"}}},
+	Resources: []server.ResourceDef{{Name: "Projects"}},
+}
+
+// testRouter builds the router for o with the given stores, as serve does.
+func testRouter(t *testing.T, o Options, d Deps) (*server.Router, error) {
+	t.Helper()
+	inst, err := newInstallation(o)
+	if err != nil {
+		t.Fatalf("newInstallation: %v", err)
+	}
+	return newRouter(inst, d)
+}
 
 func TestHealthRouteDeclaresPermissionAndServes(t *testing.T) {
-	router, err := newRouter(testOpts, Deps{})
+	router, err := testRouter(t, testOpts, Deps{})
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -66,7 +81,7 @@ func TestServeCommandHasConfigFlags(t *testing.T) {
 }
 
 func TestOpenAPISpecDocumentsHealth(t *testing.T) {
-	router, err := newRouter(testOpts, Deps{})
+	router, err := testRouter(t, testOpts, Deps{})
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -91,7 +106,7 @@ func TestOpenAPISpecDocumentsHealth(t *testing.T) {
 }
 
 func TestNewRouterWithoutRedisServesOnlyHealth(t *testing.T) {
-	router, err := newRouter(testOpts, Deps{})
+	router, err := testRouter(t, testOpts, Deps{})
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -123,7 +138,7 @@ func TestNewRouterWithSignInRegistersEveryAuthRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := testStore(t)
-	router, err := newRouter(testOpts, Deps{Sessions: store, Auth: server.NewAuth(google, store, store, nil, nil, "secret", testOpts.names())})
+	router, err := testRouter(t, testOpts, Deps{Sessions: store, Auth: server.NewAuth(google, store, store, nil, nil, "secret", testOpts.names())})
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -152,7 +167,7 @@ func TestNewRouterWithSignInRegistersEveryAuthRoute(t *testing.T) {
 }
 
 func TestNewRouterWithSessionsButNoGoogleServesMe(t *testing.T) {
-	router, err := newRouter(testOpts, Deps{Sessions: testStore(t)})
+	router, err := testRouter(t, testOpts, Deps{Sessions: testStore(t)})
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
 	}
@@ -175,7 +190,7 @@ func TestConnectRefusesGoogleWithoutRedis(t *testing.T) {
 	cfg.GoogleClientID = "id"
 	cfg.GoogleClientSecret = "secret"
 	cfg.GoogleRedirectURI = "https://testapp.test/auth/google/callback"
-	_, cleanup, err := connect(t.Context(), testOpts, cfg, zap.NewNop())
+	_, cleanup, err := connect(t.Context(), mustInstall(t, testOpts), cfg, zap.NewNop())
 	defer cleanup()
 	if err == nil || !strings.Contains(err.Error(), "TESTAPP_REDIS_ADDR") {
 		t.Fatalf("connect = %v, want a refusal naming TESTAPP_REDIS_ADDR", err)
@@ -191,7 +206,7 @@ func TestConnectRefusesGoogleWithoutDatabase(t *testing.T) {
 	cfg.GoogleClientSecret = "secret"
 	cfg.GoogleRedirectURI = "https://testapp.test/auth/google/callback"
 	cfg.RedisAddr = "127.0.0.1:1"
-	_, cleanup, err := connect(t.Context(), testOpts, cfg, zap.NewNop())
+	_, cleanup, err := connect(t.Context(), mustInstall(t, testOpts), cfg, zap.NewNop())
 	defer cleanup()
 	if err == nil || !strings.Contains(err.Error(), "TESTAPP_DATABASE_DSN") {
 		t.Fatalf("connect = %v, want a refusal naming TESTAPP_DATABASE_DSN", err)
@@ -230,4 +245,13 @@ func TestOpenAPISpecDocumentsMe(t *testing.T) {
 	if !bytes.HasSuffix(spec, []byte("}\n")) {
 		t.Errorf("spec does not end in a newline")
 	}
+}
+
+func mustInstall(t *testing.T, o Options) *installation {
+	t.Helper()
+	inst, err := newInstallation(o)
+	if err != nil {
+		t.Fatalf("newInstallation: %v", err)
+	}
+	return inst
 }

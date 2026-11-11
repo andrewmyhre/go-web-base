@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-func TestPermissionValidate(t *testing.T) {
+func TestResourcesCheck(t *testing.T) {
+	rs := testResources()
 	cases := []struct {
 		name string
 		p    Permission
@@ -14,10 +15,11 @@ func TestPermissionValidate(t *testing.T) {
 	}{
 		{"zero value", Permission{}, ErrNoPermission},
 		{"public", Public, nil},
+		{"authenticated", Authenticated, nil},
 		{"standard verb", Permission{Resource: Projects, Verb: Read}, nil},
-		{"Answer on PermissionPrompts", Permission{Resource: PermissionPrompts, Verb: Answer}, nil},
-		{"Run on Workflows", Permission{Resource: Workflows, Verb: Run}, nil},
-		{"unknown resource", Permission{Resource: "Widgets", Verb: Read}, ErrUnknownResource},
+		{"extra verb on its resource", Permission{Resource: PermissionPrompts, Verb: Answer}, nil},
+		{"another extra verb on its resource", Permission{Resource: Workflows, Verb: Run}, nil},
+		{"unregistered resource", Permission{Resource: "Widgets", Verb: Read}, ErrUnknownResource},
 		{"resource only", Permission{Resource: Projects}, ErrUnknownVerb},
 		{"verb only", Permission{Verb: Read}, ErrUnknownResource},
 		{"unknown verb", Permission{Resource: Projects, Verb: "Write"}, ErrUnknownVerb},
@@ -28,35 +30,74 @@ func TestPermissionValidate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.p.Validate()
+			err := rs.Check(tc.p)
 			if tc.want == nil {
 				if err != nil {
-					t.Fatalf("Validate(%#v) = %v, want valid", tc.p, err)
+					t.Fatalf("Check(%#v) = %v, want valid", tc.p, err)
 				}
 				return
 			}
 			if !errors.Is(err, tc.want) {
-				t.Fatalf("Validate(%#v) = %v, want %v", tc.p, err, tc.want)
+				t.Fatalf("Check(%#v) = %v, want %v", tc.p, err, tc.want)
 			}
 		})
 	}
 }
 
-// Every resource docs/roles.md names is accepted with every standard verb.
-func TestEveryPlanResourceIsKnown(t *testing.T) {
-	resources := []Resource{
-		Projects, AgentConversations, AgentMessages, PermissionPrompts,
-		Requests, ProjectFiles, Workflows, WorkflowSteps, Secrets,
-		UserInvitation, WorkflowLink, Users, AccessReviews, Providers,
+// An empty registry accepts only Public and Authenticated: core registers no
+// resources of its own.
+func TestEmptyRegistryAcceptsNoResource(t *testing.T) {
+	rs := NewResources()
+	if err := rs.Check(Public); err != nil {
+		t.Errorf("Public: %v", err)
 	}
-	if len(resources) != len(knownResources) {
-		t.Fatalf("%d resource constants, %d known", len(resources), len(knownResources))
+	if err := rs.Check(Authenticated); err != nil {
+		t.Errorf("Authenticated: %v", err)
 	}
-	for _, r := range resources {
-		for _, v := range []Verb{Read, Create, Patch, Delete} {
-			if err := (Permission{Resource: r, Verb: v}).Validate(); err != nil {
-				t.Errorf("%s: %s refused: %v", r, v, err)
-			}
+	if err := rs.Check(Permission{Resource: Projects, Verb: Read}); !errors.Is(err, ErrUnknownResource) {
+		t.Errorf("Projects: Read on an empty registry = %v, want ErrUnknownResource", err)
+	}
+}
+
+func TestResourcesRegister(t *testing.T) {
+	rs := NewResources()
+	if err := rs.Register(ResourceDef{Name: "Reports", Verbs: []Verb{"Export"}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	for _, p := range []Permission{{Resource: "Reports", Verb: Delete}, {Resource: "Reports", Verb: "Export"}} {
+		if err := rs.Check(p); err != nil {
+			t.Errorf("Check(%s) = %v", p, err)
+		}
+	}
+	bad := map[string]struct {
+		def  ResourceDef
+		want error
+	}{
+		"duplicate":           {ResourceDef{Name: "Reports"}, ErrDuplicateResource},
+		"empty name":          {ResourceDef{Name: ""}, ErrBadName},
+		"name with colon":     {ResourceDef{Name: "A: B"}, ErrBadName},
+		"name with space":     {ResourceDef{Name: "A B"}, ErrBadName},
+		"bad verb":            {ResourceDef{Name: "Other", Verbs: []Verb{"do it"}}, ErrBadName},
+		"redeclared standard": {ResourceDef{Name: "Other", Verbs: []Verb{Read}}, ErrBadName},
+	}
+	for name, c := range bad {
+		if err := rs.Register(c.def); !errors.Is(err, c.want) {
+			t.Errorf("%s: Register = %v, want %v", name, err, c.want)
+		}
+	}
+	if got := rs.Names(); len(got) != 1 || got[0] != "Reports" {
+		t.Errorf("Names() = %v, want [Reports]", got)
+	}
+}
+
+func TestCheckString(t *testing.T) {
+	rs := testResources()
+	for s, ok := range map[string]bool{
+		"Projects: Read": true, "Workflows: Run": true, "Projects: Run": false,
+		"Widgets: Read": false, "Projects Read": false, "": false,
+	} {
+		if err := rs.CheckString(s); (err == nil) != ok {
+			t.Errorf("CheckString(%q) = %v, want ok=%v", s, err, ok)
 		}
 	}
 }
@@ -85,7 +126,7 @@ func TestPermissionString(t *testing.T) {
 	}
 }
 
-func TestRegisterAndBuildRefuseInvalidPermissions(t *testing.T) {
+func TestBuildRefusesUnregisteredPermissions(t *testing.T) {
 	invalid := map[string]Permission{
 		"unknown resource": {Resource: "Widgets", Verb: Read},
 		"unknown verb":     {Resource: Projects, Verb: "Write"},
@@ -93,15 +134,13 @@ func TestRegisterAndBuildRefuseInvalidPermissions(t *testing.T) {
 	}
 	for name, p := range invalid {
 		t.Run(name, func(t *testing.T) {
+			// A permission naming an unregistered resource or verb is accepted
+			// by Register, since its resource may be registered later, and
+			// refused by Build.
 			router := newTestRouter()
-			if err := Register(router, op(http.MethodGet, "/x", p), okHandler); err == nil {
-				t.Fatalf("Register accepted %#v", p)
+			if err := Register(router, op(http.MethodGet, "/x", p), okHandler); err != nil {
+				t.Fatalf("Register refused %#v: %v", p, err)
 			}
-			// Bypass Register: startup must refuse it too.
-			router.regs = append(router.regs, registration{
-				method: http.MethodGet, path: "/x", permission: p,
-				mount: router.regs[0].mount,
-			})
 			if _, err := router.Build(nil); err == nil {
 				t.Fatalf("Build accepted %#v", p)
 			}
