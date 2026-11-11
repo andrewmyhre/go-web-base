@@ -136,6 +136,9 @@ That renders only the glue, and nothing else changes:
   at the template's release version (run `go mod tidy` once after the update to
   fetch it and record `go.sum`).
 - `deploy/dev/api.yaml`: a commented `<PREFIX>_EXAMPLE_GREETING` entry.
+- `deploy/dev/ingress.yaml` and `ui/src/service-worker.ts`: the `/example`
+  prefix, so the Ingress sends the feature's routes to the API and the
+  service worker never serves them from its cache.
 - `README.md` and `llms.txt`: a line each.
 - `ui/openapi.json` and `ui/src/lib/api/openapi.d.ts`: the route and its
   response schema, so the OpenAPI drift test and `check:client` pass with the

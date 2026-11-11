@@ -74,6 +74,8 @@ steps:
         # And with it on, the glue must be there.
         grep -q 'example.New("Contributor")' sample-features/cmd/sample-app/main.go
         grep -q '/example/hello' sample-features/ui/openapi.json
+        grep -q 'path: /example,' sample-features/deploy/dev/ingress.yaml
+        grep -q "EXTRA_API_PREFIXES: string\[\] = \['/example'\]" sample-features/ui/src/service-worker.ts
         # Dependabot config ships, parses, and watches the Go modules.
         for d in sample sample-features; do
           uvx --with pyyaml python -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])); assert c["updates"][0]["package-ecosystem"] == "gomod"' $${d}/.github/dependabot.yml
