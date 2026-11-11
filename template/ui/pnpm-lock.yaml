@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@andrewmyhre/web-base-ui':
-        specifier: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.0/andrewmyhre-web-base-ui-0.2.0.tgz
-        version: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.0/andrewmyhre-web-base-ui-0.2.0.tgz(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.57.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)(typescript@5.9.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)
+        specifier: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.1/andrewmyhre-web-base-ui-0.2.1.tgz
+        version: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.1/andrewmyhre-web-base-ui-0.2.1.tgz(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.57.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)(typescript@5.9.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)
     devDependencies:
       '@sveltejs/adapter-static':
         specifier: 3.0.10
@@ -48,9 +48,9 @@ importers:
 
 packages:
 
-  '@andrewmyhre/web-base-ui@https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.0/andrewmyhre-web-base-ui-0.2.0.tgz':
-    resolution: {tarball: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.0/andrewmyhre-web-base-ui-0.2.0.tgz}
-    version: 0.2.0
+  '@andrewmyhre/web-base-ui@https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.1/andrewmyhre-web-base-ui-0.2.1.tgz':
+    resolution: {tarball: https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.1/andrewmyhre-web-base-ui-0.2.1.tgz}
+    version: 0.2.1
     engines: {node: '>=20.19'}
     peerDependencies:
       '@sveltejs/kit': ^2.0.0
@@ -968,7 +968,7 @@ packages:
 
 snapshots:
 
-  '@andrewmyhre/web-base-ui@https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.0/andrewmyhre-web-base-ui-0.2.0.tgz(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.57.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)(typescript@5.9.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)':
+  '@andrewmyhre/web-base-ui@https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.2.1/andrewmyhre-web-base-ui-0.2.1.tgz(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.57.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)(typescript@5.9.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)':
     dependencies:
       '@sveltejs/kit': 2.70.3(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.57.3)(vite@7.3.7(@types/node@26.6.6)))(svelte@5.57.3)(typescript@5.9.3)(vite@7.3.7(@types/node@26.6.6))
       openapi-fetch: 0.17.0
