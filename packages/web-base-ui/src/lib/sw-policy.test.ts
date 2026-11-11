@@ -44,6 +44,14 @@ describe('strategyFor', () => {
 	});
 });
 
+describe('extra API prefixes', () => {
+	it('bypasses a project API path, as a fetch or a navigation', () => {
+		expect(strategyFor(get('/reports'), origin, precached, ['/reports'])).toBe('bypass');
+		expect(strategyFor(get('/reports/7', 'navigate'), origin, precached, ['/reports'])).toBe('bypass');
+		expect(strategyFor(get('/reports', 'navigate'), origin, precached)).toBe('shell');
+	});
+});
+
 describe('isApiPath', () => {
 	it('matches whole segments only', () => {
 		expect(isApiPath('/me')).toBe(true);

@@ -10,8 +10,9 @@ your project versus in the base.
 The model below is the target design, tracked in epic
 [IMM-2066](https://linear.app/immutablesoftware/issue/IMM-2066). Today the
 shared server code is the `core` Go module in this repository, and a project
-generated from the current template imports it. Releases, Dependabot and the
-UI packages are not done yet. Projects generated at `v0.1.x` still carry
+generated from the current template imports it, and the reusable UI is the
+`@andrewmyhre/web-base-ui` package. Dependabot and the feature UI packages are
+not done yet. Projects generated at `v0.1.x` still carry
 their own copies; `copier update` moves them onto core. Each section says which parts are **available now** and which are
 **planned**, with the issue that delivers them.
 
@@ -23,8 +24,8 @@ kind of content.
 | | Versioned packages | Copier template |
 |---|---|---|
 | Carries | shared code: server, sign-in, RBAC, logging, Redis, Postgres, config, features, reusable UI | your project's own files: `main.go` wiring, config values, deploy manifests, CI, docs |
-| Lives in your repo as | a version number in `go.mod` and `ui/package.json` | real files you own and edit |
-| You update with | a Dependabot PR, or `go get -u` and `pnpm update` | `uvx copier@9.19.1 update` |
+| Lives in your repo as | a version in `go.mod`, and a release URL in `ui/package.json` | real files you own and edit |
+| You update with | `uvx copier@9.19.1 update` for the UI package; `go get -u` or (later) a Dependabot PR for Go | `uvx copier@9.19.1 update` |
 | Conflicts | none: you never edit package code | a three-way merge with your edits |
 
 The rule behind the split: **code you would never edit is a package; code you
@@ -38,9 +39,14 @@ The Go modules are:
   RBAC, logging, Redis and Postgres access, and config.
 - One module per optional feature, such as `.../agent`.
 
-The UI packages, on GitHub Packages, are `@andrewmyhre/web-base-ui` plus one
-per feature that has UI, such as `@andrewmyhre/web-base-agent-ui`.
-(**Planned:** IMM-2067, IMM-2068, IMM-2076, IMM-2077.)
+The UI package is `@andrewmyhre/web-base-ui` (**available now**, source in
+`packages/web-base-ui/`): the account menu, avatar, side menu, user badge,
+typed API client helpers and the service worker policy. It is not on an npm
+registry. Each release attaches its tarball to a GitHub release `ui/vX.Y.Z`,
+and the template's `ui/package.json` depends on that file's URL, so it needs no
+token. Because the URL is pinned by the template, UI updates arrive through
+`copier update`. Feature UI packages, such as `@andrewmyhre/web-base-agent-ui`,
+are **planned** (IMM-2076, IMM-2077).
 
 ## Starting a project
 
@@ -61,13 +67,19 @@ and `copier update` needs it.
 
 ## Keeping up to date
 
-**Package updates (planned: IMM-2078).** Dependabot opens one grouped PR when
-go-web-base publishes new module or package versions. Your CI runs on it like
-any other PR. Read the changelog for a major version before you merge: a major
-bump means a breaking change you may have to adapt to.
+**UI package updates (available now).** The UI package version is a URL pinned
+in `ui/package.json`, so a new version arrives through `copier update`
+(below), which moves the URL and the lockfile together. Read the release notes
+of a minor version before `v1` and of any major version: they say how exports
+or CSS class names changed.
 
-**Template updates (available now).** When the template's glue changes, run
-from a clean working tree:
+**Go module updates.** Bump `core` with `go get github.com/andrewmyhre/go-web-base/core@vX.Y.Z`
+(or `copier update`, which also moves the pin). **Planned (IMM-2078):**
+Dependabot opens a grouped PR for new Go module versions. Your CI runs on it
+like any other PR; read the changelog for a major version before you merge.
+
+**Template updates (available now).** When the template's glue changes, and
+for every release of the UI package, run from a clean working tree:
 
 ```sh
 uvx copier@9.19.1 update
@@ -160,7 +172,8 @@ supports.
 **Planned: IMM-2070.**
 
 - Go modules are tagged per module: `core/v0.3.0`, `agent/v0.1.0`.
-- UI packages are tagged `ui/v0.3.0`.
+- The UI package is released as the GitHub release `ui/v0.3.0` (available
+  now), with the same number as core.
 - The template is tagged `v0.3.0`.
 - All follow semver. A breaking change to an exported Go API, the `Install`
   contract or a package's exports is a major bump. Before `v1`, a minor bump may
@@ -172,9 +185,11 @@ supports.
 that builds a project needs access:
 
 - Go: `GOPRIVATE=github.com/andrewmyhre/*`, plus a `.netrc` for `github.com`.
-- npm: an `.npmrc` that maps `@andrewmyhre` to GitHub Packages with a token.
+- npm: nothing, while go-web-base is public. The UI package is a release
+  tarball downloaded by URL. If the repository ever goes private, the URL
+  needs an authenticated download and this section is the place to add it.
 - In Woodpecker, the generated pipeline mints a short-lived kit-pai-app token
-  in the step and writes both files from it. Never store the token.
+  in the step and writes the `.netrc` from it. Never store the token.
 
 ## Working on the base and a project together
 
@@ -183,7 +198,7 @@ project without publishing it:
 
 ```sh
 go work init . ../go-web-base/core
-# ui/package.json: "@andrewmyhre/web-base-ui": "link:../../go-web-base/ui"
+# ui/package.json: "@andrewmyhre/web-base-ui": "link:../../go-web-base/packages/web-base-ui"
 ```
 
 Remove the `go.work` file and the `link:` before you commit. CI must build

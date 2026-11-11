@@ -125,7 +125,8 @@ steps:
     commands:
       - cd sample/ui
       - corepack enable
-      - pnpm add ../../andrewmyhre-web-base-ui-0.0.0.tgz
+      - pnpm pkg set "dependencies.@andrewmyhre/web-base-ui=file:../../andrewmyhre-web-base-ui-0.0.0.tgz"
+      - pnpm install --no-frozen-lockfile
       - pnpm run check:client
       - pnpm test
       - pnpm check

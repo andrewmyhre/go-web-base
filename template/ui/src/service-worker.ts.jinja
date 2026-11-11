@@ -10,6 +10,9 @@ import { strategyFor } from '@andrewmyhre/web-base-ui/sw-policy';
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const CACHE = `[[ ident ]]-ui-${version}`;
 const SHELL = '/';
+// API paths this project adds to the package's base set (/auth, /me, /health,
+// /openapi.json). Keep in step with deploy/dev/ingress.yaml.
+const EXTRA_API_PREFIXES: string[] = [];
 // The built app, the files in static/, and the shell (index.html, which the
 // static server returns for /). Nothing else is ever written to the cache.
 const PRECACHE = [SHELL, ...build, ...files];
@@ -35,7 +38,7 @@ sw.addEventListener('activate', (event) => {
 
 sw.addEventListener('fetch', (event) => {
 	const req = event.request;
-	switch (strategyFor(req, sw.location.origin, precached)) {
+	switch (strategyFor(req, sw.location.origin, precached, EXTRA_API_PREFIXES)) {
 		case 'bypass':
 			return;
 		case 'cache-first':
