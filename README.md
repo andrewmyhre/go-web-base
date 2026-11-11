@@ -25,6 +25,10 @@ SvelteKit PWA with Google sign-in and Casbin RBAC, generated from
 
 ## Use
 
+For how projects are meant to build on the base over time (versioned
+packages, feature toggles, what belongs where), read
+[docs/consuming.md](docs/consuming.md).
+
 Copier is pinned to **9.19.1**. Run it through `uvx`; nothing needs installing
 beyond [uv](https://docs.astral.sh/uv/).
 
