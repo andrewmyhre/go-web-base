@@ -1,10 +1,17 @@
 # go-web-base
 
 A [Copier](https://copier.readthedocs.io) template for a Go API and a
-SvelteKit PWA with Google sign-in and Casbin RBAC, generated from
+SvelteKit PWA with Google sign-in and Casbin RBAC, whose
+server code lives in the `core/` Go module of this repository, which a
+generated project imports instead of copying. The code began as
 `andrewmyhre/huddle-go` at `v0.1.0` (commit `6028ffc`).
 
 ## What a generated project has
+
+The Go code below is `core`, imported at the version pinned in the project's
+`go.mod`. The project itself holds a small `cmd/<slug>/main.go` that calls
+`app.Main` with its name, env prefix and cookie prefix, tests for the files it
+owns, docs, deploy manifests, CI and the UI. See [core/README.md](core/README.md).
 
 - A Go API on chi and Huma. Every route goes through `server.Register` with a
   typed `server.Permission`, `server.Public` or `server.Authenticated`, and an
@@ -55,24 +62,13 @@ uvx copier@9.19.1 update
 | `env_prefix` | slug in upper case, `-` as `_` | every `PREFIX_*` variable |
 | `dev_host` | `<slug>-dev.immutablesoftware.dev` | ingress, redirect URI, docs |
 | `dev_namespace` | `<slug>-dev` | dev environment |
-| `test_namespace` | `<slug>-test` | test Postgres and Redis |
 | `registry` | `192.168.0.10:30500` | image names |
-| `test_postgres_nodeport` | none | test Postgres; must be free on the cluster |
-| `test_redis_nodeport` | none | test Redis; free, and not the Postgres port |
 | `admin_sub` | empty | the global Admin's Google sub |
 
 Two values are derived and never asked: the lower case of `env_prefix` names
 the cookies (`<ident>_session`, `<ident>_oauth_state`), the Postgres user and
 database, the Redis key prefixes and the root Go package; the first label of
 `dev_host` is the Cloudflare subdomain.
-
-The two NodePorts have no default, because a default would collide for the
-second project that kept it. Find free ones with `kubectl get svc -A`. The
-validator rejects ports outside 30000-32767, the same port twice, and the
-ports in `taken_nodeports` in `copier.yml`: a snapshot of services on the
-cluster that were not generated from this template. Never add a generated
-project's ports to that list, because its `copier update` would then fail
-validation.
 
 ## Per-project setup checklist
 
@@ -90,8 +86,7 @@ are your answers.
      domain.
 3. **Seal the secrets** with `kubeseal` (controller
    `sealed-secrets-controller` in `kube-system`). The commands are in the
-   generated `deploy/test-services/README.md` and `deploy/dev/README.md`:
-   - `test-services` (`password`) in `<test_namespace>`;
+   generated `deploy/dev/README.md`:
    - `dev-services` (`postgres-password`, `redis-password`) in
      `<dev_namespace>`;
    - `<slug>-google-oauth` (`client-id`, `client-secret`) in
@@ -99,16 +94,10 @@ are your answers.
 
    The template never ships a SealedSecret: each is encrypted for one cluster
    and namespace.
-4. **One-time applies** from `deploy/test-services` and `deploy/dev`: the
-   namespaces, `rbac.yaml`, Postgres and Redis, then the first app rollout
+4. **One-time applies** from `deploy/dev`: the
+   namespace, `rbac.yaml`, Postgres and Redis, then the first app rollout
    (`deploy/dev/README.md`, step 3).
-5. **Woodpecker repo secrets** for the test services:
-   `<prefix>_TEST_DATABASE_URL`, `<prefix>_TEST_REDIS_ADDR` and
-   `<prefix>_TEST_REDIS_PASSWORD` (values in
-   `deploy/test-services/README.md`). Add them to the right repo: huddle-go
-   once had them on the wrong one, and the only symptom was CI stuck on
-   pending.
-6. **Cloudflare route, DNS and Access app.** Needs Andrew's yes. The default
+5. **Cloudflare route, DNS and Access app.** Needs Andrew's yes. The default
    zone is `immutablesoftware.dev`:
 
    ```sh
@@ -116,7 +105,7 @@ are your answers.
      add-service "<project_name> Dev" <dev_subdomain>
    ```
 
-7. **The admin.** Set `<prefix>_ADMIN_SUB` in `deploy/dev/api.yaml` to the
+6. **The admin.** Set `<prefix>_ADMIN_SUB` in `deploy/dev/api.yaml` to the
    owner's Google sub (digits, never an email). If you left `admin_sub` empty,
    nobody can sign in yet, so `/me` cannot tell you. Sign in once anyway: the
    refusal logs an `rbac` deny line whose `subject` is the sub.
@@ -134,10 +123,14 @@ are your answers.
   Svelte's `{#if}` is a Jinja comment opener, and Go uses `[%q]`. A YAML flow
   list of one templated value needs quotes (`["[[ project_slug ]]"]`), or
   `[[[` confuses the lexer.
-- The generated project's Postgres and Redis tests fail rather than skip when
-  their env vars are unset. `<prefix>_SKIP_SERVICE_TESTS=1` is the one
-  deliberate skip. Template CI uses it, because it has no test services.
-  `pipeline_test.go` fails if a generated project's own pipeline ever sets it.
+- A generated project's tests need no Postgres or Redis: those tests live in
+  `core/` and run against Woodpecker `services:` in this repository's own CI.
+  The generated pipeline therefore has no test services and no secrets.
+- A generated project's `go.mod` requires a core release
+  (`github.com/andrewmyhre/go-web-base/core v0.2.0`). `go.sum` has no `core`
+  line, because a release has to exist to be hashed: when core is tagged, run
+  `go mod tidy` in a generated project (or render the template) and keep the
+  new line in `template/go.sum`.
 
 ### Template CI
 
@@ -146,37 +139,40 @@ are your answers.
 
 - sweeps it for `huddle` and for unrendered `[[ ]]` tags, with a control
   render using huddle answers that must bring the string back;
-- runs `gofmt`, `go vet` and `go test` with the service tests skipped;
-- runs the UI's `check:client`, `test`, `check` and `build`.
+- in `sample/`, runs `go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core`
+  and `go mod tidy`, so the template is tested against the core in the same
+  commit, then `gofmt`, `go vet` and `go test`;
+- runs the UI's `check:client`, `test`, `check` and `build`;
+- tests `core/` itself against real Postgres and Redis services.
 
 The sample's own image build and deploy steps never run: Woodpecker reads only
 the root `.woodpecker.yml`.
 
-To run the same checks locally:
+To run the same checks locally (the replace path is absolute because the
+sample is outside this checkout):
 
 ```sh
 uvx copier@9.19.1 copy --vcs-ref HEAD --defaults --trust . /tmp/sample \
-  -d project_slug=sample-app -d github_repo=example/sample-app \
-  -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
+  -d project_slug=sample-app -d github_repo=example/sample-app
 cd /tmp/sample
-test -z "$(gofmt -l .)" && go vet ./... && SAMPLE_APP_SKIP_SERVICE_TESTS=1 go test ./...
+go mod edit -replace github.com/andrewmyhre/go-web-base/core=/path/to/go-web-base/core
+go mod tidy
+test -z "$(gofmt -l .)" && go vet ./... && go test ./...
 cd ui && pnpm install --frozen-lockfile && pnpm run check:client && pnpm test && pnpm check && pnpm build
 ```
 
 ### Regression control
 
-Rendering with huddle answers reproduces `huddle-go` `v0.1.0` except for
-deliberate changes: the sealed secrets and `docs/plan-high-level.md` are
-dropped, the Roles section moved to `docs/roles.md`, the skip switch was added,
-the setup docs gained the sealing commands, and the old Linear issue
-references were removed. huddle-go's NodePorts are on the taken list, so the
-control uses others, and the port lines differ too.
+The control render uses huddle answers (`project_slug=huddle-go`,
+`env_prefix=HUDDLE`). It no longer reproduces `huddle-go` `v0.1.0`, because
+that code moved into `core/`. What it proves now is that the sweep works: the
+render must contain the string `huddle`, so a sweep that finds nothing in the
+sample means the template is clean, not that the sweep is blind.
 
-```sh
-git -C ~/projects/huddle-go archive v0.1.0 | tar -x -C /tmp/huddle-v0.1.0
-uvx copier@9.19.1 copy --vcs-ref HEAD --defaults --trust . /tmp/huddle-render \
-  -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go \
-  -d env_prefix=HUDDLE -d dev_host=huddle-dev.immutablesoftware.dev \
-  -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
-diff -r /tmp/huddle-v0.1.0 /tmp/huddle-render
-```
+### Updating from an older template
+
+A project generated at `v0.1.x` carries its own `config`, `db`, `server` and
+the other packages. `copier update` to a core-based version deletes the files
+the template no longer renders, then the project needs `go mod tidy` once
+(and a `go.sum` line for core, once core is tagged). Edits the project made to
+those packages are lost with them: move them upstream into `core/` first.

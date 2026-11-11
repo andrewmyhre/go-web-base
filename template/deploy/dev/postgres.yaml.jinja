@@ -1,5 +1,5 @@
-# Dev Postgres for [[ project_slug ]]. Unlike deploy/test-services, the data lives on a
-# PersistentVolumeClaim, so Casbin policy and app data survive a pod restart.
+# Dev Postgres for [[ project_slug ]]. The data lives on a PersistentVolumeClaim, so
+# Casbin policy and app data survive a pod restart.
 # ClusterIP only: nothing outside the cluster needs it.
 #
 # The container runs as the image's entrypoint, which starts as root and drops

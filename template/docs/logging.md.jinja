@@ -2,21 +2,21 @@
 
 Every log line `[[ project_slug ]]` emits follows one schema, so Loki can filter to
 exactly one provider, agent, session, content kind, queue, request or RBAC
-decision.
+decision. The schema, the typed helpers that emit it and the redaction rules
+are core's, in the `logging` package of
+`github.com/andrewmyhre/go-web-base/core` (see its README and godoc); this
+file holds what is specific to this project: its queries and its dashboard.
 
-## How it works
-
-- Logs go to stderr as zap JSON. The cluster's Fluent Bit already ships them
-  to Loki and parses the JSON fields (`Merge_Log On`), so no shipping
-  configuration is needed.
-- The helpers live in the `logging` package and emit each scope's fixed
-  fields; call sites never type field names.
-- Every line carries the low-cardinality `scope` and the `service`
-  (`[[ project_slug ]]`).
+- Logs go to stderr as zap JSON. The cluster's Fluent Bit ships them to Loki
+  and parses the JSON fields (`Merge_Log On`), so no shipping configuration is
+  needed.
+- Every line carries the low-cardinality `scope` (`api`, `rbac`, `queue` or
+  `agent`) and the `service` (`[[ project_slug ]]`, the `Name` in
+  `cmd/[[ project_slug ]]/main.go`).
 - Field values are JSON fields, never Loki labels: session and agent ids are
   high-cardinality and must stay filterable as line fields.
 
-## The schema
+The fields per scope, for writing queries:
 
 | `scope` | fields |
 | -- | -- |
@@ -25,33 +25,8 @@ decision.
 | `queue` | `queue`, `job_id`, `attempt`, `outcome` |
 | `agent` | `provider`, `agent_id`, `session_id`, `kind` (`thought`, `tool_use`, `tool_result`, `message`, `prompt`, `question`), `content` |
 
-- `api` is the access log: one line per request. The `request_id` is
-  generated per request and returned to the caller in the `X-Request-Id`
-  response header; `rbac` lines of the same request carry the same id, so
-  the two pair in Loki. `path` is the request as sent and `route` the
-  matched pattern, which is empty for a 404, so `path` is what an unmatched
-  request has to go on. `client_ip` is the connection's peer; proxy headers
-  are never trusted.
-- `rbac` is one line per check of a route that is not public, allow or
-  deny. `subject` is the Google account ID, and empty for a request with no
-  session (answered 401). `domain` is `global` until routes are
-  project-scoped. A route that needs only a signed-in user, such as `/me`,
-  logs `object` `authenticated` and an empty `action`; any other route logs
-  its permission's resource and verb, such as `Projects` and `Read`. `api`
-  lines carry the signed-in user's `user_sub`.
-- `queue` and `agent` helpers are defined and redacting; later phases fill
-  them in against this contract rather than inventing one.
-- `decision` is `allow` or `deny`, and `kind` is one of the six values
-  above.
-
-## Redaction
-
-The `logging` helpers redact known secret values before a line is written,
-because docs/roles.md says no role can read them and agent prompts and tool
-results are where they would leak. Each secret value the logger is
-configured with is replaced in an agent line's `content` with the literal
-marker `[REDACTED]`. Redaction covers only values the logger knows, and only
-`content`: other fields hold ids and names, not free text.
+An `api` line and the `rbac` lines of the same request share a `request_id`,
+which is also returned in the `X-Request-Id` response header.
 
 ## LogQL
 
@@ -108,4 +83,4 @@ through its api and rbac lines.
   ```
 
 - `deploy/grafana/dashboard_test.go` pins the six variables to the
-  `logging` package's scopes and kinds, and checks every panel applies them.
+  `logging` package's (core's) scopes and kinds, and checks every panel applies them.

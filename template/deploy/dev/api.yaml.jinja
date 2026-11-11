@@ -48,7 +48,7 @@ spec:
               valueFrom: { secretKeyRef: { name: [[ project_slug ]]-google-oauth, key: client-id } }
             - name: [[ env_prefix ]]_GOOGLE_CLIENT_SECRET
               valueFrom: { secretKeyRef: { name: [[ project_slug ]]-google-oauth, key: client-secret } }
-            # The global Admin, bootstrapped at startup (db/rbac.go): the
+            # The global Admin, bootstrapped at startup (core db package): the
             # owner's Google account ID (the OIDC sub), never an email. Empty
             # skips the bootstrap, and then nobody can sign in.
             - { name: [[ env_prefix ]]_ADMIN_SUB, value: "[[ admin_sub ]]" }

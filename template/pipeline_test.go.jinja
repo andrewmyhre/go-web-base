@@ -28,20 +28,12 @@ func TestWoodpeckerPipeline(t *testing.T) {
 		"name: test",
 		"name: lint",
 		"go test ./...",
-		"from_secret: [[ env_prefix ]]_TEST_DATABASE_URL",
-		"from_secret: [[ env_prefix ]]_TEST_REDIS_ADDR",
-		"from_secret: [[ env_prefix ]]_TEST_REDIS_PASSWORD",
 		"gofmt -l .",
 		"go vet ./...",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("pipeline is missing %q", want)
 		}
-	}
-	// The skip switch is for checkouts with no test services. This
-	// project's own pipeline has them, so it must never skip.
-	if strings.Contains(s, "SKIP_SERVICE_TESTS") {
-		t.Error("pipeline sets SKIP_SERVICE_TESTS; its tests must run against the test services")
 	}
 }
 

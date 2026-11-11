@@ -21,18 +21,7 @@ when:
 steps:
   - name: test
     image: golang:1.26
-    # The throwaway Postgres and Redis in deploy/test-services. Tests that need
-    # them fail rather than skip when these are unset, so check them up front
-    # for a clear error.
-    environment:
-      [[ env_prefix ]]_TEST_DATABASE_URL:
-        from_secret: [[ env_prefix ]]_TEST_DATABASE_URL
-      [[ env_prefix ]]_TEST_REDIS_ADDR:
-        from_secret: [[ env_prefix ]]_TEST_REDIS_ADDR
-      [[ env_prefix ]]_TEST_REDIS_PASSWORD:
-        from_secret: [[ env_prefix ]]_TEST_REDIS_PASSWORD
     commands:
-      - for v in [[ env_prefix ]]_TEST_DATABASE_URL [[ env_prefix ]]_TEST_REDIS_ADDR [[ env_prefix ]]_TEST_REDIS_PASSWORD; do eval "test -n \"\$$v\"" || { echo "$v is not set; add it as a Woodpecker repo secret" >&2; exit 1; }; done
       - go test ./...
 
   - name: lint

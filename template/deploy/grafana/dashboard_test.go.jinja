@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"[[ go_module ]]/logging"
+	"github.com/andrewmyhre/go-web-base/core/logging"
 )
 
 type variable struct {
@@ -103,7 +103,7 @@ func TestDashboardPanelsFilter(t *testing.T) {
 		for _, tg := range p.Targets {
 			for _, want := range []string{
 				`kubernetes_namespace_name="$namespace"`,
-				`| json | service="` + logging.Service + `"`,
+				`| json | service="[[ project_slug ]]"`,
 			} {
 				if !strings.Contains(tg.Expr, want) {
 					t.Errorf("panel %q query lacks %s", p.Title, want)

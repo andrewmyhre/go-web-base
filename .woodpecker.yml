@@ -3,9 +3,10 @@
 # rot. Woodpecker reads only this root file, never template/.woodpecker.yml.jinja,
 # so the sample's image build and deploy steps never run here.
 #
-# The sample's Postgres and Redis tests are skipped with
-# SAMPLE_APP_SKIP_SERVICE_TESTS=1: template CI has no test services, and the
-# generated project's own pipeline runs those tests against its own.
+# A generated project imports core instead of carrying a copy, and needs no
+# Postgres or Redis for its own tests. Its go.mod requires a core release that
+# may not exist yet, so the go step points it at ../core, the core in the same
+# commit, before it builds anything.
 #
 # The core step tests the core/ Go module, a plain module that is not
 # rendered. Unlike the sample it runs its Postgres and Redis tests for real,
@@ -33,11 +34,9 @@ steps:
         git config --global --add safe.directory '*'
         COPIER="uvx copier@9.19.1"
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample \
-          -d project_slug=sample-app -d github_repo=example/sample-app \
-          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
+          -d project_slug=sample-app -d github_repo=example/sample-app
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . /tmp/control \
-          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE \
-          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
+          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE
         if grep -rIil huddle sample; then
           echo "sweep: huddle survives in the sample" >&2
           exit 1
@@ -51,10 +50,10 @@ steps:
   - name: go
     image: golang:1.26
     depends_on: [render]
-    environment:
-      SAMPLE_APP_SKIP_SERVICE_TESTS: "1"
     commands:
       - cd sample
+      - go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core
+      - go mod tidy
       - test -z "$(gofmt -l .)"
       - go vet ./...
       - go test ./...
