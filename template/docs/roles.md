@@ -1,10 +1,10 @@
 # Roles
 
-> This is the example role graph the base ships with. Edit it to fit the
-> project: the role table in `db/rbac.go` and the resources and verbs in
-> `server/permission.go` change with it, and `TestRolesMatchPlan` in
-> `db/rbac_test.go` fails until the three agree. The test parses this file:
-> keep each role as a `## Name (scope)` heading, an optional
+> This is the role graph core ships with (`db.Roles()` in
+> `github.com/andrewmyhre/go-web-base/core/db`). The role table is fixed in
+> core for now, so this file documents it, and `TestRolesMatchDocs` in
+> `roles_test.go` fails until the two agree. The test parses this file: keep
+> each role as a `## Name (scope)` heading, an optional
 > `Everything a X and a Y has` line, and `- Resource: Verb` bullets.
 
 Roles are cumulative: each role has every permission of the role below it, plus the ones listed under it. In Casbin each role inherits from the one below it, so a permission is defined once.

@@ -2,199 +2,11 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"slices"
-	"strings"
 	"testing"
 
-	goredis "github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
-
-	"[[ go_module ]]/config"
-	"[[ go_module ]]/redis"
-	"[[ go_module ]]/server"
+	"github.com/andrewmyhre/go-web-base/core/app"
 )
-
-func TestHealthRouteDeclaresPermissionAndServes(t *testing.T) {
-	router, err := newRouter(deps{})
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	var found bool
-	for _, r := range router.Routes() {
-		if r.Method == http.MethodGet && r.Path == "/health" {
-			found = true
-			if !r.Permission.IsPublic() {
-				t.Fatalf("/health permission = %v, want server.Public", r.Permission)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("GET /health is not registered")
-	}
-
-	handler, err := server.New(config.Default(), zap.NewNop(), router).Handler()
-	if err != nil {
-		t.Fatalf("Handler: %v", err)
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-	var body HealthOutput
-	if err := json.Unmarshal(rec.Body.Bytes(), &body.Body); err != nil {
-		t.Fatalf("GET /health body is not JSON: %v: %s", err, rec.Body.String())
-	}
-	if rec.Code != http.StatusOK || body.Body.Status != "ok" {
-		t.Fatalf("GET /health = %d %s, want 200 {\"status\":\"ok\"}", rec.Code, rec.Body.String())
-	}
-}
-
-func TestServeCommandHasConfigFlags(t *testing.T) {
-	cmd, _, err := newRootCmd().Find([]string{"serve"})
-	if err != nil || cmd.Name() != "serve" {
-		t.Fatalf("serve subcommand not found: %v", err)
-	}
-	for _, name := range []string{"addr", "log-level"} {
-		if cmd.Flags().Lookup(name) == nil {
-			t.Errorf("serve has no --%s flag", name)
-		}
-	}
-}
-
-func TestOpenAPISpecDocumentsHealth(t *testing.T) {
-	router, err := newRouter(deps{})
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	handler, err := server.New(config.Default(), zap.NewNop(), router).Handler()
-	if err != nil {
-		t.Fatalf("Handler: %v", err)
-	}
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, server.OpenAPIPath, nil))
-	var spec struct {
-		Info  struct{ Title string } `json:"info"`
-		Paths map[string]map[string]struct {
-			OperationID string `json:"operationId"`
-		} `json:"paths"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
-		t.Fatalf("spec is not JSON: %v", err)
-	}
-	if rec.Code != http.StatusOK || spec.Info.Title != "[[ project_slug ]]" || spec.Paths["/health"]["get"].OperationID != "get-health" {
-		t.Fatalf("GET %s = %d, want a [[ project_slug ]] spec with get-health; got %s", server.OpenAPIPath, rec.Code, rec.Body.String())
-	}
-}
-
-func TestNewRouterWithoutRedisServesOnlyHealth(t *testing.T) {
-	router, err := newRouter(deps{})
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	paths := map[string]bool{}
-	for _, r := range router.Routes() {
-		paths[r.Path] = true
-	}
-	if !paths["/health"] {
-		t.Fatal("GET /health is not registered")
-	}
-	for _, p := range []string{"/me", server.AuthStartPath, server.AuthCallbackPath} {
-		if paths[p] {
-			t.Errorf("%s is registered although redis is not configured", p)
-		}
-	}
-}
-
-func testStore(t *testing.T) *redis.Store {
-	client := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"})
-	t.Cleanup(func() { _ = client.Close() })
-	return redis.NewStore(client, "test:")
-}
-
-func TestNewRouterWithSignInRegistersEveryAuthRoute(t *testing.T) {
-	google, err := server.NewGoogle(server.GoogleConfig{
-		ClientID: "id", ClientSecret: "secret", RedirectURL: "https://[[ ident ]].test/auth/google/callback",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := testStore(t)
-	router, err := newRouter(deps{sessions: store, auth: server.NewAuth(google, store, store, nil, nil, "secret")})
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	type want struct {
-		method, path, id string
-		perm             server.Permission
-	}
-	got := map[string]want{}
-	for _, r := range router.Routes() {
-		got[r.OperationID] = want{r.Method, r.Path, r.OperationID, r.Permission}
-	}
-	for _, w := range []want{
-		{http.MethodGet, "/health", "get-health", server.Public},
-		{http.MethodGet, "/me", "get-me", server.Authenticated},
-		{http.MethodGet, server.AuthStartPath, "auth-google-start", server.Public},
-		{http.MethodGet, server.AuthCallbackPath, "auth-google-callback", server.Public},
-		{http.MethodPost, server.LogoutPath, "auth-logout", server.Public},
-	} {
-		if got[w.id] != w {
-			t.Errorf("route %s = %+v, want %+v", w.id, got[w.id], w)
-		}
-	}
-	if _, err := server.New(config.Default(), zap.NewNop(), router).Handler(); err != nil {
-		t.Fatalf("Handler: %v", err)
-	}
-}
-
-func TestNewRouterWithSessionsButNoGoogleServesMe(t *testing.T) {
-	router, err := newRouter(deps{sessions: testStore(t)})
-	if err != nil {
-		t.Fatalf("newRouter: %v", err)
-	}
-	paths := map[string]bool{}
-	for _, r := range router.Routes() {
-		paths[r.Path] = true
-	}
-	if !paths["/me"] {
-		t.Error("GET /me is not registered although there is a session store")
-	}
-	if paths[server.AuthStartPath] || paths[server.AuthCallbackPath] || paths[server.LogoutPath] {
-		t.Error("the sign-in routes are registered although google is not configured")
-	}
-}
-
-// TestConnectRefusesGoogleWithoutRedis: sign-in keeps its attempts and
-// sessions in Redis, so it cannot run without it.
-func TestConnectRefusesGoogleWithoutRedis(t *testing.T) {
-	cfg := config.Default()
-	cfg.GoogleClientID = "id"
-	cfg.GoogleClientSecret = "secret"
-	cfg.GoogleRedirectURI = "https://[[ ident ]].test/auth/google/callback"
-	_, cleanup, err := connect(t.Context(), cfg, zap.NewNop())
-	defer cleanup()
-	if err == nil || !strings.Contains(err.Error(), "[[ env_prefix ]]_REDIS_ADDR") {
-		t.Fatalf("connect = %v, want a refusal naming [[ env_prefix ]]_REDIS_ADDR", err)
-	}
-}
-
-// TestConnectRefusesGoogleWithoutDatabase: sign-in refuses anyone without
-// a role binding and the bindings live in Postgres, so with no database
-// nobody could ever sign in. connect refuses before dialling anything.
-func TestConnectRefusesGoogleWithoutDatabase(t *testing.T) {
-	cfg := config.Default()
-	cfg.GoogleClientID = "id"
-	cfg.GoogleClientSecret = "secret"
-	cfg.GoogleRedirectURI = "https://[[ ident ]].test/auth/google/callback"
-	cfg.RedisAddr = "127.0.0.1:1"
-	_, cleanup, err := connect(t.Context(), cfg, zap.NewNop())
-	defer cleanup()
-	if err == nil || !strings.Contains(err.Error(), "[[ env_prefix ]]_DATABASE_DSN") {
-		t.Fatalf("connect = %v, want a refusal naming [[ env_prefix ]]_DATABASE_DSN", err)
-	}
-}
 
 // TestCommittedOpenAPISpecIsCurrent is the first half of the UI client drift
 // check. ui/openapi.json must be byte-for-byte what `[[ project_slug ]] openapi`
@@ -202,9 +14,9 @@ func TestConnectRefusesGoogleWithoutDatabase(t *testing.T) {
 // regenerates src/lib/api/openapi.d.ts from that file and fails on any
 // difference. Together they keep the typed client equal to the API.
 func TestCommittedOpenAPISpecIsCurrent(t *testing.T) {
-	want, err := openAPISpec()
+	want, err := app.OpenAPISpec(options())
 	if err != nil {
-		t.Fatalf("openAPISpec: %v", err)
+		t.Fatalf("OpenAPISpec: %v", err)
 	}
 	got, err := os.ReadFile("../../ui/openapi.json")
 	if err != nil {
@@ -212,39 +24,5 @@ func TestCommittedOpenAPISpecIsCurrent(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("ui/openapi.json is stale. Regenerate it and the client from ui/:\n\n  pnpm run generate\n\nwhich runs `go run ./cmd/[[ project_slug ]] openapi > ui/openapi.json` and openapi-typescript.")
-	}
-}
-
-// TestOpenAPISpecDocumentsMe pins what the UI depends on in the spec the
-// openapi command prints: GET /me with the user's id, name and avatar.
-func TestOpenAPISpecDocumentsMe(t *testing.T) {
-	spec, err := openAPISpec()
-	if err != nil {
-		t.Fatalf("openAPISpec: %v", err)
-	}
-	var doc struct {
-		Paths map[string]map[string]struct {
-			OperationID string `json:"operationId"`
-		} `json:"paths"`
-		Components struct {
-			Schemas map[string]struct {
-				Required []string `json:"required"`
-			} `json:"schemas"`
-		} `json:"components"`
-	}
-	if err := json.Unmarshal(spec, &doc); err != nil {
-		t.Fatalf("spec is not JSON: %v", err)
-	}
-	if got := doc.Paths["/me"]["get"].OperationID; got != "get-me" {
-		t.Fatalf("spec GET /me operationId = %q, want get-me", got)
-	}
-	req := doc.Components.Schemas["MeOutputBody"].Required
-	for _, f := range []string{"id", "name", "email", "avatar"} {
-		if !slices.Contains(req, f) {
-			t.Errorf("MeOutputBody required = %v, missing %q", req, f)
-		}
-	}
-	if !bytes.HasSuffix(spec, []byte("}\n")) {
-		t.Errorf("spec does not end in a newline")
 	}
 }

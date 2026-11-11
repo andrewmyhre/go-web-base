@@ -1,0 +1,148 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/andrewmyhre/go-web-base/core/redis"
+)
+
+const (
+	// SessionTTL is how long a session lasts. It is fixed from sign-in, not
+	// refreshed on use.
+	SessionTTL = 7 * 24 * time.Hour
+
+	// The fields of a session record in the store.
+	sessionSub    = "sub"
+	sessionName   = "name"
+	sessionEmail  = "email"
+	sessionAvatar = "avatar"
+)
+
+// SessionStore keeps server-side records under opaque random ids.
+// *redis.Store implements it; Get and Take return redis.ErrNotFound for an
+// id that does not exist or has expired.
+type SessionStore interface {
+	Create(ctx context.Context, ttl time.Duration, data map[string]string) (string, error)
+	Get(ctx context.Context, id string) (map[string]string, error)
+	Take(ctx context.Context, id string) (map[string]string, error)
+	Delete(ctx context.Context, id string) error
+}
+
+var _ SessionStore = (*redis.Store)(nil)
+
+// Session is the signed-in user for the duration of one request. UserID is
+// the Google account ID (the OIDC sub) and is the identity; the email is
+// shown, never matched on.
+type Session struct {
+	UserID string
+	Name   string
+	Email  string
+	Avatar string
+}
+
+func (s *Session) data() map[string]string {
+	return map[string]string{
+		sessionSub:    s.UserID,
+		sessionName:   s.Name,
+		sessionEmail:  s.Email,
+		sessionAvatar: s.Avatar,
+	}
+}
+
+// sessionFromData assembles a Session from a store record. It is nil when
+// the record has no subject.
+func sessionFromData(data map[string]string) *Session {
+	if data[sessionSub] == "" {
+		return nil
+	}
+	return &Session{
+		UserID: data[sessionSub],
+		Name:   data[sessionName],
+		Email:  data[sessionEmail],
+		Avatar: data[sessionAvatar],
+	}
+}
+
+// validID reports whether id has the shape of a redis.Store id: 64
+// lowercase hex characters. Anything else is never looked up.
+func validID(id string) bool {
+	if len(id) != 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// sessionIDKey carries the well-formed session id the browser presented,
+// found or not, so Logout can end it without a cookie parameter of its
+// own (whose name could not be set per app in a struct tag).
+type sessionIDKey struct{}
+
+func sessionIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(sessionIDKey{}).(string)
+	return id
+}
+
+// sessionMiddleware resolves the session cookie called cookieName to a Session on the request
+// context. A missing, malformed, unknown or expired cookie leaves the
+// request anonymous, and the route's authorization check decides. A store
+// failure is marked on the context so the check answers 503 rather than
+// treating the user as signed out.
+func sessionMiddleware(store SessionStore, cookieName string, log *zap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, err := r.Cookie(cookieName)
+			if err != nil || !validID(c.Value) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), sessionIDKey{}, c.Value))
+			data, err := store.Get(r.Context(), c.Value)
+			switch {
+			case errors.Is(err, redis.ErrNotFound):
+				next.ServeHTTP(w, r)
+			case err != nil:
+				log.Error("resolve session", zap.String("request_id", RequestIDFromContext(r.Context())), zap.Error(err))
+				next.ServeHTTP(w, r.WithContext(noteSessionError(r.Context())))
+			default:
+				if s := sessionFromData(data); s != nil {
+					r = r.WithContext(noteRequestSession(r.Context(), s))
+				}
+				next.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
+// setCookie writes a cookie with the flags every cookie carries:
+// HttpOnly so scripts cannot read it, Secure so it never travels over plain
+// HTTP, and SameSite=Lax so a cross-site subrequest or POST does not carry
+// it while a top-level navigation (Google's redirect back) does. A
+// negative maxAge deletes it.
+func setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
+	c := cookie(name, value, path, maxAge)
+	http.SetCookie(w, &c)
+}
+
+// cookie is the cookie setCookie writes, for a Huma output header.
+func cookie(name, value, path string, maxAge int) http.Cookie {
+	return http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     path,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	}
+}

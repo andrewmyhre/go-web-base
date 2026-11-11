@@ -64,43 +64,10 @@ dev_namespace:
   help: Kubernetes namespace for dev
   default: "[[ project_slug ]]-dev"
 
-test_namespace:
-  type: str
-  help: Kubernetes namespace for the throwaway test Postgres and Redis
-  default: "[[ project_slug ]]-test"
-
 registry:
   type: str
   help: Image registry (plain HTTP, pushed to by BuildKit)
   default: "192.168.0.10:30500"
-
-# NodePorts already taken on the homelab cluster (kubectl get svc -A,
-# 2026-11-10). Only services NOT generated from this template belong here:
-# adding a generated project's own ports would make its `copier update` fail
-# validation.
-taken_nodeports:
-  type: yaml
-  when: false
-  default: [30017, 30050, 30080, 30096, 30100, 30174, 30432, 30443, 30491, 30500, 30533, 30543, 30554, 30580, 30637, 30732, 30778, 30880, 30999, 31666, 32554]
-
-# No defaults: two projects on one cluster cannot share these, so a default
-# would collide for the second project that kept it.
-test_postgres_nodeport:
-  type: int
-  help: NodePort for the test Postgres, 30000-32767 and free on the cluster (check with `kubectl get svc -A`)
-  validator: >-
-    [[% if not (30000 <= test_postgres_nodeport <= 32767) %]]Must be 30000-32767.
-    [[%- elif test_postgres_nodeport in taken_nodeports %]]Already taken on the cluster; pick a free port.
-    [[%- endif %]]
-
-test_redis_nodeport:
-  type: int
-  help: NodePort for the test Redis, 30000-32767, free on the cluster and not the Postgres port
-  validator: >-
-    [[% if not (30000 <= test_redis_nodeport <= 32767) %]]Must be 30000-32767.
-    [[%- elif test_redis_nodeport in taken_nodeports %]]Already taken on the cluster; pick a free port.
-    [[%- elif test_redis_nodeport == test_postgres_nodeport %]]Must differ from the Postgres port.
-    [[%- endif %]]
 
 admin_sub:
   type: str

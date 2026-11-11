@@ -8,10 +8,11 @@ your project versus in the base.
 ## Status
 
 The model below is the target design, tracked in epic
-[IMM-2066](https://linear.app/immutablesoftware/issue/IMM-2066). Today, at
-template `v0.1.1`, only the Copier half exists: a generated project carries
-its own copy of every package, and `copier update` is the only way to pick up
-changes. Each section says which parts are **available now** and which are
+[IMM-2066](https://linear.app/immutablesoftware/issue/IMM-2066). Today the
+shared server code is the `core` Go module in this repository, and a project
+generated from the current template imports it. Releases, Dependabot and the
+UI packages are not done yet. Projects generated at `v0.1.x` still carry
+their own copies; `copier update` moves them onto core. Each section says which parts are **available now** and which are
 **planned**, with the issue that delivers them.
 
 ## The model
@@ -50,7 +51,7 @@ uvx copier@9.19.1 copy gh:andrewmyhre/go-web-base my-app
 ```
 
 Copier asks for the slug, names, Go module path, env prefix, dev host,
-namespaces, registry, two free test NodePorts and the admin's Google sub.
+namespaces, registry and the admin's Google sub.
 Then work through the per-project setup checklist in the
 [README](../README.md#per-project-setup-checklist): nothing works on the
 cluster until it is done.
@@ -114,14 +115,16 @@ When unsure, build it in your project first. Move it into go-web-base when the
 second project needs it. Do not edit code that came from a package: fork the
 change upstream instead, or it disappears at the next bump.
 
-Until IMM-2068 lands, the base's code is copied into your project, so a fix
-made in your copy does not reach go-web-base or the other projects. Make the
-fix in go-web-base, then pick it up with `copier update`.
+The base's server code comes from `core`, imported rather than copied, so
+there is no copy of it in your project to edit. Make the fix in go-web-base's
+`core/` and bump the version in your `go.mod`. Projects still on the old
+copied layout (template `v0.1.x`) get core by running `copier update`.
 
 ## Roles and permissions
 
-**Available now:** your role graph is `docs/roles.md`, and `TestRolesMatchPlan`
-fails until the table in `db/rbac.go` agrees with it. Edit both together.
+**Available now:** the role graph is fixed in core (`db.Roles()`).
+`docs/roles.md` documents it, and `TestRolesMatchDocs` in your project fails
+until the two agree.
 
 **Planned: IMM-2071.** Your app registers its role graph with core at startup.
 Features add their own resources and grant them to your roles. Every route

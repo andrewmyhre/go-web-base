@@ -3,9 +3,16 @@
 # rot. Woodpecker reads only this root file, never template/.woodpecker.yml.jinja,
 # so the sample's image build and deploy steps never run here.
 #
-# The sample's Postgres and Redis tests are skipped with
-# SAMPLE_APP_SKIP_SERVICE_TESTS=1: template CI has no test services, and the
-# generated project's own pipeline runs those tests against its own.
+# A generated project imports core instead of carrying a copy, and needs no
+# Postgres or Redis for its own tests. Its go.mod requires a core release that
+# may not exist yet, so the go step points it at ../core, the core in the same
+# commit, before it builds anything.
+#
+# The core step tests the core/ Go module, a plain module that is not
+# rendered. Unlike the sample it runs its Postgres and Redis tests for real,
+# against the services: below, which Woodpecker starts for the workflow and
+# makes reachable by service name. Nothing there sets CORE_SKIP_SERVICE_TESTS,
+# so a missing service fails the step rather than skipping tests.
 #
 # Woodpecker substitutes dollar references at load time, so shell variables
 # are written with a doubled dollar sign.
@@ -27,11 +34,9 @@ steps:
         git config --global --add safe.directory '*'
         COPIER="uvx copier@9.19.1"
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample \
-          -d project_slug=sample-app -d github_repo=example/sample-app \
-          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
+          -d project_slug=sample-app -d github_repo=example/sample-app
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . /tmp/control \
-          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE \
-          -d test_postgres_nodeport=30601 -d test_redis_nodeport=30602
+          -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE
         if grep -rIil huddle sample; then
           echo "sweep: huddle survives in the sample" >&2
           exit 1
@@ -45,10 +50,25 @@ steps:
   - name: go
     image: golang:1.26
     depends_on: [render]
-    environment:
-      SAMPLE_APP_SKIP_SERVICE_TESTS: "1"
     commands:
       - cd sample
+      - go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core
+      - go mod tidy
+      - test -z "$(gofmt -l .)"
+      - go vet ./...
+      - go test ./...
+
+  - name: core
+    image: golang:1.26
+    environment:
+      CORE_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/core_test?sslmode=disable
+      CORE_TEST_REDIS_ADDR: redis:6379
+    commands:
+      # The postgres image listens on TCP only once its init is done, so an
+      # open port means it is ready. Give up after two minutes.
+      - timeout 120 bash -c 'until (echo > /dev/tcp/postgres/5432) 2>/dev/null; do sleep 2; done'
+      - timeout 60 bash -c 'until (echo > /dev/tcp/redis/6379) 2>/dev/null; do sleep 1; done'
+      - cd core
       - test -z "$(gofmt -l .)"
       - go vet ./...
       - go test ./...
@@ -66,3 +86,12 @@ steps:
       - pnpm test
       - pnpm check
       - pnpm build
+
+services:
+  - name: postgres
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_PASSWORD: ci
+      POSTGRES_DB: core_test
+  - name: redis
+    image: redis:8.10-alpine

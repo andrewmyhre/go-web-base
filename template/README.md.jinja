@@ -1,8 +1,8 @@
 # [[ project_slug ]]
 
-The [[ project_slug ]] API module: an HTTP server with configuration, structured
-logging, and permission-gated route registration, plus a SvelteKit PWA in
-`ui/`.
+The [[ project_slug ]] API: a thin program on go-web-base core (an HTTP server
+with Google sign-in, Casbin RBAC, structured logging and permission-gated
+routes), plus a SvelteKit PWA in `ui/`.
 
 [[ project_name ]] was generated from the
 [go-web-base](https://github.com/andrewmyhre/go-web-base) Copier template.
@@ -10,189 +10,50 @@ logging, and permission-gated route registration, plus a SvelteKit PWA in
 later template changes. `llms.txt` lists every doc; the example role graph is
 `docs/roles.md`.
 
-## Stack
+## What is here
 
-- [chi](https://github.com/go-chi/chi) for HTTP routing, with
-  [Huma](https://huma.rocks) on top (through its `humachi` adapter) for
-  typed operations and a generated OpenAPI 3.1 spec.
-- [zap](https://github.com/uber-go/zap) for structured JSON logging,
-  including the per-request access log and panic recovery (chi
-  middleware).
-- [Cobra](https://github.com/spf13/cobra) for the command line.
-- [Viper](https://github.com/spf13/viper) for configuration.
+The server, sign-in, sessions, RBAC, logging, Redis and Postgres access and
+configuration are not in this repository: they come from
+[go-web-base core](https://github.com/andrewmyhre/go-web-base/tree/main/core)
+(`github.com/andrewmyhre/go-web-base/core`, pinned in `go.mod`). Its README
+is the reference for route permissions, the sign-in flow, sessions,
+authorization and the `app.Options` contract. This repository holds only what
+is specific to [[ project_name ]]:
 
-## Layout
+- `cmd/[[ project_slug ]]/main.go`: a call to `app.Main` with this project's
+  name, version, env prefix (`[[ env_prefix ]]`) and cookie prefix
+  (`[[ ident ]]`), and the `Routes` hook where its own routes go. Every route
+  goes through `server.Register` with a declared permission; an unguarded
+  route stops the server at startup.
+- `docs/roles.md`: the role graph core ships. `TestRolesMatchDocs`
+  (`roles_test.go`) fails until it agrees with `db.Roles()`.
+- `docs/logging.md` and `deploy/grafana/`: the logging queries and the Grafana
+  dashboard for this project's namespace.
+- `deploy/`: the image Dockerfiles and the dev environment manifests.
+- `ui/`: the SvelteKit PWA.
+- `.woodpecker.yml`: tests, lint, UI checks, image builds and `deploy-dev`.
 
-- `config/`: server configuration (address, log level, the database and
-  Redis connection strings, and the Google OAuth client), read by Viper from
-  `[[ env_prefix ]]_`-prefixed environment variables and the `serve` flags.
-- `logger/`: the zap JSON logger.
-- `redis/`: the Redis client and a `Store` with per-key expiry, used to hold
-  the one-shot OAuth state records and the sessions.
-- `server/`: the HTTP server, the permission-gated router, the zap
-  request-logging and recovery middleware, and the Google OAuth sign-in with
-  its session middleware.
-- `cmd/[[ project_slug ]]/`: the `[[ project_slug ]]` binary and its route table.
+## Configuration
 
-## Route permissions
-
-Every route is a Huma operation that declares the permission a caller
-needs to invoke it:
-
-```go
-type HealthOutput struct {
-    Body struct {
-        Status string `json:"status"`
-    }
-}
-
-server.Register(router, server.Operation{
-    OperationID: "get-health",
-    Method:      http.MethodGet,
-    Path:        "/health",
-    Permission:  server.Public,
-}, func(ctx context.Context, _ *struct{}) (*HealthOutput, error) {
-    out := &HealthOutput{}
-    out.Body.Status = "ok"
-    return out, nil
-})
-```
-
-Registration without a valid permission is refused, and the server
-re-checks every route when it starts. A route without a declared
-permission can therefore never be served: an unprotected route cannot
-exist.
-
-### Permissions are typed
-
-A `server.Permission` is a `Resource` and a `Verb`, in the form the Roles
-section of `docs/roles.md` uses (`String()` gives
-`"Projects: Read"`):
-
-```go
-server.Permission{Resource: server.Projects, Verb: server.Read}
-```
-
-- Resources are the 14 docs/roles.md names: `Projects`,
-  `AgentConversations`, `AgentMessages`, `PermissionPrompts`, `Requests`,
-  `ProjectFiles`, `Workflows`, `WorkflowSteps`, `Secrets`,
-  `UserInvitation`, `WorkflowLink`, `Users`, `AccessReviews` and
-  `Providers`.
-- Verbs are `Read`, `Create`, `Patch` and `Delete` on any resource, plus
-  two that apply to one resource only: `Answer` (only
-  `PermissionPrompts: Answer`) and `Run` (only `Workflows: Run`, which the
-  roles doc grants to Contributors although its verb list omits it).
-- `server.Public` declares a route that needs no role, such as `/health`
-  and `/openapi.json`. It is a deliberate declaration: the zero value
-  `Permission{}` is refused with `ErrNoPermission`, and only this package
-  can construct `Public`. `p.IsPublic()` tells an authorisation middleware
-  to let the route through.
-
-`Register` and `Build` refuse the zero value (`ErrNoPermission`), an
-unknown resource (`ErrUnknownResource`), an unknown verb
-(`ErrUnknownVerb`) and a one-resource verb on any other resource
-(`ErrVerbNotAllowed`).
-
-`server.Register` is the only way to add a route. The chi router and the
-`huma.API` are built inside `Router.Build` and never handed out (`Build`
-returns a plain `http.Handler`), so no caller can register an unchecked
-route. The declared `Permission` value is stored in the operation's Huma
-`Metadata` under `permission`, is available to handlers through
-`server.PermissionFromContext`, and is recorded in the access log in its
-`String()` form (`"Projects: Read"` or `"public"`).
-
-### The OpenAPI spec and Huma's own routes
-
-Huma normally registers its own routes (`/openapi.json`, `/openapi.yaml`
-and the 3.0 variants, `/docs` and `/schemas/{schema}`) directly on the
-router, outside `server.Register`. Those are all switched off. The spec is
-served instead at `GET /openapi.json` as an ordinary registration
-declared `server.Public`, so it goes through the same check as every
-other route. There are no exempt routes: public is a declaration, not an
-absence.
-
-As a last check, `Build` walks the chi router and refuses to start if it
-holds any route that did not come through a permission-checked
-registration. Turning Huma's automatic routes back on therefore stops the
-server at startup instead of serving them unchecked.
-
-### Duplicates and conflicts
-
-chi does not panic on a conflicting pattern such as `/things/{name}` next
-to `/things/{id}`: it silently replaces the earlier route. `Register`
-refuses a method and path that match an existing route once parameter
-names are ignored, and `Build` refuses to start if any checked route is
-missing from the router afterwards. Routes chi or Huma panic on (for
-example an unclosed `{` or a non-struct input type) come back from `Build`
-as errors.
-
-## Sign-in (Google OAuth)
-
-Users sign in with Google's OpenID Connect authorization-code flow, with
-PKCE (S256) and a nonce. The Google account ID (the ID token's `sub`) is the
-identity; the email is shown, never matched on. Sign-in is off while
-`[[ env_prefix ]]_GOOGLE_CLIENT_ID` is empty, and needs Redis when it is on: `serve`
-refuses to start with a client id and no `[[ env_prefix ]]_REDIS_ADDR`.
-
-| route | permission | behaviour |
-|---|---|---|
-| `GET /auth/google` | public | records a sign-in attempt, sets the state cookie, 302 to Google |
-| `GET /auth/google/callback` | public | checks and consumes the attempt, verifies the ID token, starts a session, 302 to `/` (the UI) |
-| `POST /auth/logout` | public | deletes the session and clears its cookie, 204 |
-| `GET /me` | authenticated | the signed-in user's `id`, `name`, `email` and `avatar`, or 401 |
-
-### The sign-in attempt
-
-`GET /auth/google` stores a PKCE verifier and a nonce in Redis under a random
-256-bit id with a 10 minute TTL. That id is the OAuth `state`, and it is also
-set in the `[[ ident ]]_oauth_state` cookie (`Path=/auth/google`). The callback
-refuses a `state` that does not equal the cookie, so an attempt only
-completes in the browser that started it, and takes the attempt with
-`GETDEL`, so it completes at most once.
-
-The code is exchanged with the verifier. The ID token from the token
-endpoint is verified with go-oidc: its RS256 signature against Google's JWKS,
-`iss`, `aud` equal to the client id, and `exp`; then `nonce` must equal the
-attempt's and `azp`, when present, the client id. The email is kept only when
-`email_verified` is true.
-
-### Sessions
-
-A successful callback ends any session the browser already had and creates a
-new one under a fresh random 256-bit id, so a planted id never becomes a
-signed-in session. The session lives in Redis for 7 days from sign-in, not
-refreshed on use. The `[[ ident ]]_session` cookie carries only the id and is
-`HttpOnly`, `Secure`, `SameSite=Lax` and `Path=/`.
-
-There is no return-to parameter: the callback always lands on `/`, the UI home page, so
-there is no open redirect.
-
-### Authorization
-
-A route that is not `server.Public` needs a session: without one it answers
-401, and with an unreachable Redis 503. `server.Authenticated` routes (like
-`/me`) need nothing more. Any other permission is checked with Casbin in the
-global domain, 403 on a denial. Every check of a non-public route logs one
-`rbac` line, allow or deny (`docs/logging.md`). `Build` refuses to start a
-router holding a non-public route it has no session store for, or a role
-route it has no authorizer for.
-
-### Configuration
+Settings are read from `[[ env_prefix ]]_`-prefixed environment variables and
+the `serve` flags. The Google client secret and Redis password are
+environment only, so they never appear in process arguments.
 
 | setting | flag | environment |
 |---|---|---|
+| address | `--addr` | `[[ env_prefix ]]_ADDR` |
+| log level | `--log-level` | `[[ env_prefix ]]_LOG_LEVEL` |
 | Google client id | `--google-client-id` | `[[ env_prefix ]]_GOOGLE_CLIENT_ID` |
 | Google client secret | none | `[[ env_prefix ]]_GOOGLE_CLIENT_SECRET` |
 | Google redirect URI | `--google-redirect-uri` | `[[ env_prefix ]]_GOOGLE_REDIRECT_URI` |
 | Redis address | `--redis-addr` | `[[ env_prefix ]]_REDIS_ADDR` |
 | Redis password | none | `[[ env_prefix ]]_REDIS_PASSWORD` |
+| database DSN | none | `[[ env_prefix ]]_DATABASE_DSN` |
+| admin sub | none | `[[ env_prefix ]]_ADMIN_SUB` |
 
-The client secret and Redis password are environment only, so they never
-appear in process arguments. The redirect URI is required and must be
-registered with the Google OAuth client; it is never derived from a
-request's `Host` header. With `[[ env_prefix ]]_DATABASE_DSN` set, `serve` applies the
-migrations at startup, then builds the Casbin enforcer and binds
-`[[ env_prefix ]]_ADMIN_SUB` (a Google account ID) to Admin.
+Sign-in is off while the client id is empty, and needs Redis and Postgres when
+it is on. With the database DSN set, `serve` applies the migrations at
+startup, then binds the admin sub (a Google account ID) to Admin.
 
 ## Running
 
@@ -201,15 +62,6 @@ go run ./cmd/[[ project_slug ]] serve
 go run ./cmd/[[ project_slug ]] serve --addr :9090 --log-level debug
 [[ env_prefix ]]_ADDR=:9090 [[ env_prefix ]]_LOG_LEVEL=debug go run ./cmd/[[ project_slug ]] serve
 ```
-
-| setting   | flag          | environment        | default |
-|-----------|---------------|--------------------|---------|
-| address   | `--addr`      | `[[ env_prefix ]]_ADDR`      | `:8080` |
-| log level | `--log-level` | `[[ env_prefix ]]_LOG_LEVEL` | `info`  |
-
-The database, admin-sub, Redis and Google OAuth settings are environment
-variables (and some, like `--google-client-id`, also flags); see the
-[Sign-in](#sign-in-google-oauth) section for the full table.
 
 A flag given on the command line wins over the environment, which wins
 over the default. Log levels are `debug`, `info`, `warn` and `error`.
@@ -255,6 +107,6 @@ from `ui/openapi.json`, which is the output of:
 go run ./cmd/[[ project_slug ]] openapi > ui/openapi.json
 ```
 
-`TestCommittedOpenAPISpecIsCurrent` fails when that file is stale, and the
+`TestCommittedOpenAPISpecIsCurrent` (compared with `app.OpenAPISpec`) fails when that file is stale, and the
 `ui` pipeline step fails when the generated client is. See
 [ui/README.md](ui/README.md).

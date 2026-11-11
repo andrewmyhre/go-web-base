@@ -1,11 +1,12 @@
 # go-web-base
 
-> A Copier template, generated from huddle-go v0.1.0, for Go + SvelteKit web projects with Google sign-in and Casbin RBAC. Tracked in Linear (team IMM, project "go-web-base").
+> A Copier template, plus the `core` Go module it imports, for Go + SvelteKit web projects with Google sign-in and Casbin RBAC. Tracked in Linear (team IMM, project "go-web-base").
 
 ## Docs
 
-- [README.md](README.md): What a generated project has, how to copy and update one (Copier 9.19.1 via uvx), the questions, the per-project setup checklist, and how the template and its CI work.
+- [README.md](README.md): What a generated project has, how to copy and update one (Copier 9.19.1 via uvx), the questions, the per-project setup checklist, and how the template and its CI work (including moving a v0.1.x project onto core).
 - [docs/consuming.md](docs/consuming.md): How projects build on go-web-base - versioned packages for shared code, Copier for glue, updating, enabling features, what belongs where, writing a feature. Target design (epic IMM-2066), with what is available now marked.
+- [core/README.md](core/README.md): The `core` Go module, the shared server code (app, server, config, db, redis, logger, logging), the `app.Options` contract that supplies every project-specific value, and how to run its tests with and without Postgres and Redis.
 - [copier.yml](copier.yml): The questions, their defaults and validators, the derived values, and the `[[ ]]` Jinja delimiters.
-- [.woodpecker.yml](.woodpecker.yml): Template CI - renders a sample project, sweeps it for `huddle`, and runs its Go and UI checks with the service tests skipped.
+- [.woodpecker.yml](.woodpecker.yml): Template CI - renders a sample project, sweeps it for `huddle`, and runs its Go (against the in-tree core, via a go.mod replace) and UI checks; also a `core` step that tests the core module against real Postgres and Redis services.
 - [template/llms.txt.jinja](template/llms.txt.jinja): The doc index each generated project starts with.
