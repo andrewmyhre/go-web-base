@@ -64,8 +64,10 @@ steps:
           fi
         done
         # With every feature off, nothing of a feature may appear in the Go,
-        # deploy manifests or docs of the sample.
-        if grep -rnI --exclude=pnpm-lock.yaml -e 'features/example' -e 'EXAMPLE_GREETING' -e 'example\.New' -e '/example/hello' -e 'ExampleGreetings' sample; then
+        # deploy manifests or docs of the sample. go.sum is shared by every
+        # feature choice (go mod tidy drops unused lines), and
+        # .copier-answers.yml records git describe, which can name a feature tag.
+        if grep -rnI --exclude=pnpm-lock.yaml --exclude=go.sum --exclude=.copier-answers.yml -e 'features/example' -e 'EXAMPLE_GREETING' -e 'example\.New' -e '/example/hello' -e 'ExampleGreetings' sample; then
           echo "sweep: example feature glue survives with feature_example=false" >&2
           exit 1
         fi
