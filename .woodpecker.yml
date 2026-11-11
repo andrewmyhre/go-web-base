@@ -81,13 +81,13 @@ steps:
   - name: core
     image: golang:1.26
     environment:
-      CORE_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/core_test?sslmode=disable
-      CORE_TEST_REDIS_ADDR: redis:6379
+      CORE_TEST_DATABASE_URL: postgres://postgres:ci@core-pg-${CI_PIPELINE_NUMBER}:5432/core_test?sslmode=disable
+      CORE_TEST_REDIS_ADDR: core-redis-${CI_PIPELINE_NUMBER}:6379
     commands:
       # The postgres image listens on TCP only once its init is done, so an
       # open port means it is ready. Give up after two minutes.
-      - timeout 120 bash -c 'until (echo > /dev/tcp/postgres/5432) 2>/dev/null; do sleep 2; done'
-      - timeout 60 bash -c 'until (echo > /dev/tcp/redis/6379) 2>/dev/null; do sleep 1; done'
+      - timeout 120 bash -c 'until (echo > /dev/tcp/core-pg-${CI_PIPELINE_NUMBER}/5432) 2>/dev/null; do sleep 2; done'
+      - timeout 60 bash -c 'until (echo > /dev/tcp/core-redis-${CI_PIPELINE_NUMBER}/6379) 2>/dev/null; do sleep 1; done'
       - cd core
       - test -z "$(gofmt -l .)"
       - go vet ./...
@@ -107,11 +107,16 @@ steps:
       - pnpm check
       - pnpm build
 
+# Named per pipeline: on the Kubernetes backend each service becomes a
+# Kubernetes Service named after it, all in one namespace, so two go-web-base
+# pipelines running at once would collide on a fixed name. With fixed names,
+# the second of two concurrent pipelines hung (pipelines 10 and 13).
+# ${CI_PIPELINE_NUMBER} is substituted when Woodpecker loads this file.
 services:
-  - name: postgres
+  - name: core-pg-${CI_PIPELINE_NUMBER}
     image: postgres:18.6-alpine
     environment:
       POSTGRES_PASSWORD: ci
       POSTGRES_DB: core_test
-  - name: redis
+  - name: core-redis-${CI_PIPELINE_NUMBER}
     image: redis:8.10-alpine
