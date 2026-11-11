@@ -1,0 +1,64 @@
+{
+  "name": "@andrewmyhre/web-base-ui",
+  "version": "0.0.0",
+  "description": "Reusable UI for go-web-base projects: account menu, avatar, side menu, typed API client helpers and the service worker policy.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrewmyhre/go-web-base.git",
+    "directory": "packages/web-base-ui"
+  },
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "svelte-package --input src/lib --output dist",
+    "test": "vitest run",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "prepack": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "svelte": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "default": "./dist/api/index.js"
+    },
+    "./sw-policy": {
+      "types": "./dist/sw-policy.d.ts",
+      "default": "./dist/sw-policy.js"
+    }
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0",
+    "svelte": "^5.0.0"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "2.70.3",
+    "@sveltejs/package": "2.5.8",
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "@testing-library/svelte": "5.4.2",
+    "happy-dom": "20.14.6",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.7",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
+  }
+}

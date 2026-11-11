@@ -7,7 +7,7 @@
 #
 # Prefix matches whole path segments, so /me also covers /me/... but not
 # /meetings. A new API route needs a path here, and the same prefix in the
-# UI service worker's bypass list (ui/src/lib/sw-policy.ts). deploy-dev
+# UI service worker's bypass list (EXTRA_API_PREFIXES in ui/src/service-worker.ts). deploy-dev
 # applies this file on every push to main.
 apiVersion: networking.k8s.io/v1
 kind: Ingress

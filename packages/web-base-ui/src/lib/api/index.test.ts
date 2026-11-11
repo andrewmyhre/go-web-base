@@ -23,7 +23,7 @@ function clientAnswering(res: Response) {
 		seen.push(input);
 		return res;
 	}) as unknown as typeof globalThis.fetch;
-	return { client: createApiClient({ baseUrl: 'https://[[ ident ]].test', fetch }), seen };
+	return { client: createApiClient({ baseUrl: 'https://app.test', fetch }), seen };
 }
 
 describe('paths', () => {

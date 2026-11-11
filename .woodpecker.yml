@@ -8,6 +8,10 @@
 # may not exist yet, so the go step points it at ../core, the core in the same
 # commit, before it builds anything.
 #
+# The generated UI imports @andrewmyhre/web-base-ui, whose release URL may not
+# exist yet, so the ui step builds and packs packages/web-base-ui from this
+# commit and points the sample at that tarball before it checks anything.
+#
 # The core step tests the core/ Go module and the features/example module,
 # plain modules that are not rendered (the feature builds against ../../core
 # through its go.mod replace). Unlike the sample it runs their Postgres and
@@ -99,13 +103,54 @@ steps:
       - go vet ./...
       - go test ./...
 
+  # The UI package is tested and packed from this commit, then the sample
+  # depends on that local tarball instead of the pinned release URL, the way
+  # the go step points the sample at ../core. The sample's lockfile is
+  # rewritten by the add, so this step cannot use --frozen-lockfile; the
+  # frozen check on the pinned URL is release-check-ui.
+  - name: ui-package
+    image: node:22.23.4-bookworm
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd packages/web-base-ui
+      - corepack enable
+      - pnpm install --frozen-lockfile
+      - pnpm build
+      - pnpm test
+      - pnpm check
+      # Version 0.0.0 as committed, so the tarball is andrewmyhre-web-base-ui-0.0.0.tgz.
+      - pnpm pack --pack-destination ../..
+      - test -f ../../andrewmyhre-web-base-ui-0.0.0.tgz
+
   - name: ui
     image: node:22.23.4-bookworm
-    depends_on: [render]
+    depends_on: [render, ui-package]
     environment:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     commands:
       - cd sample/ui
+      - corepack enable
+      - pnpm pkg set "dependencies.@andrewmyhre/web-base-ui=file:../../andrewmyhre-web-base-ui-0.0.0.tgz"
+      - pnpm install --no-frozen-lockfile
+      - pnpm run check:client
+      - pnpm test
+      - pnpm check
+      - pnpm build
+
+  # On a template tag, the same UI checks against the pinned release URL
+  # with a frozen lockfile, so a stale pnpm-lock.yaml or a missing release
+  # asset fails here. scripts/release.sh creates the release and the lockfile.
+  - name: release-check-ui
+    image: node:22.23.4-bookworm
+    depends_on: [render]
+    when:
+      - event: tag
+        ref: refs/tags/v*
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd release-sample/ui
       - corepack enable
       - pnpm install --frozen-lockfile
       - pnpm run check:client
@@ -113,11 +158,13 @@ steps:
       - pnpm check
       - pnpm build
 
-# Named per pipeline: on the Kubernetes backend each service becomes a
-# Kubernetes Service named after it, all in one namespace, so two go-web-base
-# pipelines running at once would collide on a fixed name. With fixed names,
-# the second of two concurrent pipelines hung (pipelines 10 and 13).
-# ${CI_PIPELINE_NUMBER} is substituted when Woodpecker loads this file.
+# Named per pipeline. On the Kubernetes backend a service runs as a pod with a
+# unique name, and steps reach it by its step name through a headless Service
+# in the shared woodpecker namespace, so per-pipeline names keep concurrent
+# pipelines from resolving each other's databases. Some pipelines here have
+# hung after their steps finished (10, 13, 19); the cause is not known, and
+# these names did not prevent it. ${CI_PIPELINE_NUMBER} is substituted when
+# Woodpecker loads this file.
 services:
   - name: core-pg-${CI_PIPELINE_NUMBER}
     image: postgres:18.6-alpine
