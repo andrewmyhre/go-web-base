@@ -3,12 +3,17 @@ package server
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
+	"strings"
 )
 
 // A Permission is what a caller must hold to invoke a route: a verb on a
 // resource, in the form docs/roles.md uses in its Roles section,
-// e.g. "Projects: Read". The one exception is Public, for the few routes
-// no role is needed for.
+// e.g. "Projects: Read". The resources are not fixed in core: the app and
+// its features register them in a Resources registry, and Router.Build
+// refuses a permission that names one that was never registered. The
+// exceptions are Public and Authenticated, for routes that need no role.
 //
 // The zero value is not a permission: a route declaring Permission{} is
 // refused with ErrNoPermission, exactly as an undeclared one is. Public and
@@ -56,16 +61,25 @@ var (
 	// ErrNoPermission is returned for a route that declares no permission
 	// (the zero value).
 	ErrNoPermission = errors.New("route has no declared permission")
-	// ErrUnknownResource is returned for a resource docs/roles.md does not name.
+	// ErrUnknownResource is returned for a resource nobody registered, and
+	// for a malformed Public or Authenticated permission.
 	ErrUnknownResource = errors.New("unknown permission resource")
-	// ErrUnknownVerb is returned for a verb docs/roles.md does not name.
+	// ErrUnknownVerb is returned for a verb that is neither standard nor
+	// registered by any resource.
 	ErrUnknownVerb = errors.New("unknown permission verb")
 	// ErrVerbNotAllowed is returned for a verb used on a resource it does
-	// not apply to, e.g. Answer on anything but PermissionPrompts.
+	// not apply to: one resource registered it, and this is another.
 	ErrVerbNotAllowed = errors.New("verb not allowed on resource")
+	// ErrDuplicateResource is returned when a resource is registered twice.
+	ErrDuplicateResource = errors.New("resource already registered")
+	// ErrBadName is returned for a resource or verb name that is not a plain
+	// identifier: letters and digits, starting with a letter.
+	ErrBadName = errors.New("bad resource or verb name")
 )
 
-// Validate reports whether p is a permission a route may declare.
+// Validate reports whether p is well formed: it declares something, and is
+// not both Public and Authenticated. It does not know which resources exist;
+// Resources.Check does, and Router.Build runs it for every route.
 func (p Permission) Validate() error {
 	if p.public && p.authenticated {
 		return fmt.Errorf("%w: a permission cannot be both Public and Authenticated", ErrUnknownResource)
@@ -79,71 +93,114 @@ func (p Permission) Validate() error {
 	if p == (Permission{}) {
 		return ErrNoPermission
 	}
-	if !knownResources[p.Resource] {
-		return fmt.Errorf("%w: %q", ErrUnknownResource, p.Resource)
-	}
-	only, special := specialVerbs[p.Verb]
-	if !special && !standardVerbs[p.Verb] {
-		return fmt.Errorf("%w: %q", ErrUnknownVerb, p.Verb)
-	}
-	if special && p.Resource != only {
-		return fmt.Errorf("%w: %s (%s applies only to %s)", ErrVerbNotAllowed, p, p.Verb, only)
-	}
 	return nil
 }
 
 // Verb is an action on a resource.
 type Verb string
 
-// Verbs, from docs/roles.md.
+// The standard verbs, valid on every resource. A resource may register more
+// of its own (ResourceDef.Verbs), for example "Run" on a workflows resource.
 const (
 	Read   Verb = "Read"
 	Create Verb = "Create"
 	Patch  Verb = "Patch"
 	Delete Verb = "Delete"
-	// Answer applies only to PermissionPrompts ("PermissionPrompts: Answer").
-	Answer Verb = "Answer"
-	// Run applies only to Workflows ("Workflows: Run"). The verb list in docs/roles.md
-	// omits it, but its Contributor role grants it and its Workflow Manager
-	// role depends on it.
-	Run Verb = "Run"
 )
 
-var standardVerbs = map[Verb]bool{Read: true, Create: true, Patch: true, Delete: true}
-
-// specialVerbs maps each verb that applies to one resource only to that
-// resource.
-var specialVerbs = map[Verb]Resource{
-	Answer: PermissionPrompts,
-	Run:    Workflows,
-}
+var standardVerbs = []Verb{Read, Create, Patch, Delete}
 
 // Resource is a kind of object a permission applies to.
 type Resource string
 
-// Resources, one per resource docs/roles.md names. The comment gives the
-// line of docs/roles.md it first appears on.
-const (
-	Projects           Resource = "Projects"           // :33
-	AgentConversations Resource = "AgentConversations" // :34
-	AgentMessages      Resource = "AgentMessages"      // :36
-	PermissionPrompts  Resource = "PermissionPrompts"  // :39
-	Requests           Resource = "Requests"           // :40
-	ProjectFiles       Resource = "ProjectFiles"       // :42
-	Workflows          Resource = "Workflows"          // :46
-	WorkflowSteps      Resource = "WorkflowSteps"      // :48
-	Secrets            Resource = "Secrets"            // :52
-	UserInvitation     Resource = "UserInvitation"     // :58
-	WorkflowLink       Resource = "WorkflowLink"       // :72
-	Users              Resource = "Users"              // :83
-	AccessReviews      Resource = "AccessReviews"      // :87
-	Providers          Resource = "Providers"          // :88
-)
+// ResourceDef registers one resource: its name and the verbs it has beyond
+// the four standard ones.
+type ResourceDef struct {
+	Name Resource
+	// Verbs are extra verbs that apply to this resource, such as "Answer".
+	// A verb two resources both list applies to both.
+	Verbs []Verb
+}
 
-var knownResources = map[Resource]bool{
-	Projects: true, AgentConversations: true, AgentMessages: true,
-	PermissionPrompts: true, Requests: true, ProjectFiles: true,
-	Workflows: true, WorkflowSteps: true, Secrets: true,
-	UserInvitation: true, WorkflowLink: true, Users: true,
-	AccessReviews: true, Providers: true,
+var identifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
+
+// Resources is a registry of the resources a router accepts permissions
+// for. Every router has one and the app and its features add to it, so
+// there is no package-level list to mutate. It is not safe for concurrent
+// use: all registration happens at startup.
+type Resources struct {
+	byName map[Resource]map[Verb]bool // each resource's extra verbs
+	order  []Resource
+	// extra is every verb some resource registered, to tell an unknown verb
+	// from one used on the wrong resource.
+	extra map[Verb]bool
+}
+
+// NewResources returns an empty registry.
+func NewResources() *Resources {
+	return &Resources{byName: map[Resource]map[Verb]bool{}, extra: map[Verb]bool{}}
+}
+
+// Register adds a resource. It is refused if the name or a verb is not a
+// plain identifier, the resource is already registered, or an extra verb is
+// one of the standard four.
+func (rs *Resources) Register(def ResourceDef) error {
+	if !identifier.MatchString(string(def.Name)) {
+		return fmt.Errorf("%w: resource %q", ErrBadName, def.Name)
+	}
+	if _, dup := rs.byName[def.Name]; dup {
+		return fmt.Errorf("%w: %q", ErrDuplicateResource, def.Name)
+	}
+	verbs := map[Verb]bool{}
+	for _, v := range def.Verbs {
+		if !identifier.MatchString(string(v)) {
+			return fmt.Errorf("%w: verb %q on %s", ErrBadName, v, def.Name)
+		}
+		if slices.Contains(standardVerbs, v) {
+			return fmt.Errorf("%w: %q on %s is already a standard verb", ErrBadName, v, def.Name)
+		}
+		verbs[v] = true
+	}
+	rs.byName[def.Name] = verbs
+	rs.order = append(rs.order, def.Name)
+	for v := range verbs {
+		rs.extra[v] = true
+	}
+	return nil
+}
+
+// Names returns the registered resources, in registration order.
+func (rs *Resources) Names() []Resource { return slices.Clone(rs.order) }
+
+// Check reports whether p is a permission a route may declare: well formed,
+// and, unless Public or Authenticated, naming a registered resource and a
+// verb that applies to it.
+func (rs *Resources) Check(p Permission) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if p.public || p.authenticated {
+		return nil
+	}
+	verbs, ok := rs.byName[p.Resource]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownResource, p.Resource)
+	}
+	if slices.Contains(standardVerbs, p.Verb) || verbs[p.Verb] {
+		return nil
+	}
+	if rs.extra[p.Verb] {
+		return fmt.Errorf("%w: %s (%s does not apply to %s)", ErrVerbNotAllowed, p, p.Verb, p.Resource)
+	}
+	return fmt.Errorf("%w: %q", ErrUnknownVerb, p.Verb)
+}
+
+// CheckString is Check for a permission in the "Resource: Verb" form a role
+// graph uses.
+func (rs *Resources) CheckString(s string) error {
+	res, verb, ok := strings.Cut(s, ": ")
+	if !ok {
+		return fmt.Errorf("%w: %q is not in the form \"Resource: Verb\"", ErrUnknownVerb, s)
+	}
+	return rs.Check(Permission{Resource: Resource(res), Verb: Verb(verb)})
 }

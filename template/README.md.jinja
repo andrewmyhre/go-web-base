@@ -22,11 +22,15 @@ is specific to [[ project_name ]]:
 
 - `cmd/[[ project_slug ]]/main.go`: a call to `app.Main` with this project's
   name, version, env prefix (`[[ env_prefix ]]`) and cookie prefix
-  (`[[ ident ]]`), and the `Routes` hook where its own routes go. Every route
-  goes through `server.Register` with a declared permission; an unguarded
-  route stops the server at startup.
-- `docs/roles.md`: the role graph core ships. `TestRolesMatchDocs`
-  (`roles_test.go`) fails until it agrees with `db.Roles()`.
+  (`[[ ident ]]`), its role graph, the `Routes` hook where its own routes go,
+  and the `Features` list for optional modules. Every route goes through
+  `server.Register` with a declared permission; an unguarded route stops the
+  server at startup.
+- `roles.go`: the example role graph (`Roles()`) and the resources its
+  permissions name (`Resources()`). Core ships neither; main passes them to
+  core.
+- `docs/roles.md`: the same graph in prose. `TestRolesMatchDocs`
+  (`roles_test.go`) fails until it agrees with `roles.go`.
 - `docs/logging.md` and `deploy/grafana/`: the logging queries and the Grafana
   dashboard for this project's namespace.
 - `deploy/`: the image Dockerfiles and the dev environment manifests.

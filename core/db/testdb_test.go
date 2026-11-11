@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 // testSchema creates a uniquely named, empty schema in the test Postgres
@@ -130,7 +131,8 @@ func TestMigrateEmptySchema(t *testing.T) {
 	}
 
 	// The Down migration undoes the Up one.
-	provider, err := newProvider(stdlibDB(t, cfg))
+	core := CoreMigration()
+	provider, err := goose.NewProvider(goose.DialectPostgres, stdlibDB(t, cfg), core.FS, goose.WithTableName(core.Table))
 	if err != nil {
 		t.Fatal(err)
 	}

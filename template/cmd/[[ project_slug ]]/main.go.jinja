@@ -5,6 +5,8 @@ package main
 
 import (
 	"github.com/andrewmyhre/go-web-base/core/app"
+
+	project "[[ go_module ]]"
 )
 
 // options are this project's values. The openapi test uses the same ones, so
@@ -15,8 +17,31 @@ func options() app.Options {
 		Version:      "0.1.0",
 		EnvPrefix:    "[[ env_prefix ]]",
 		CookiePrefix: "[[ ident ]]",
-		// Routes registers this project's own routes, after core's built-ins.
-		// Every route goes through server.Register (import
+		// The role graph and the resources its permissions name live in
+		// roles.go at the project root. Core ships none of its own.
+		Roles:     project.Roles(),
+		Resources: project.Resources(),
+		// Features are optional modules, each its own Go module. To add one,
+		// go get it, import it, and list it here, naming the role it grants to
+		// where it asks for one. The example feature in go-web-base adds
+		// GET /example/hello for the "Contributor" role:
+		//
+		//	import "github.com/andrewmyhre/go-web-base/features/example"
+		//
+		//	Features: []app.Feature{example.New("Contributor")},
+		//
+		// Each feature's migrations run in this order, after core's and
+		// before this project's own. Then regenerate ui/openapi.json
+		// (pnpm run generate in ui/), since a feature's routes are in it.
+		Features: nil,
+		// Migrations holds this project's own goose migrations (*.sql in an
+		// embed.FS, passed through fs.Sub). They run last, in their own version
+		// table. Leave it unset until the project has a table of its own.
+		//
+		// Migrations: migrationsFS,
+		//
+		// Routes registers this project's own routes, after core's built-ins
+		// and the features'. Every route goes through server.Register (import
 		// "github.com/andrewmyhre/go-web-base/core/server") with a declared
 		// permission, or the server refuses to start. Uncomment and fill in:
 		//

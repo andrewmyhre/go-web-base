@@ -1,15 +1,17 @@
 # Roles
 
-> This is the role graph core ships with (`db.Roles()` in
-> `github.com/andrewmyhre/go-web-base/core/db`). The role table is fixed in
-> core for now, so this file documents it, and `TestRolesMatchDocs` in
-> `roles_test.go` fails until the two agree. The test parses this file: keep
+> This documents the role graph in `roles.go` at the project root, which
+> `cmd/<slug>/main.go` passes to core as `app.Options.Roles`. Core ships no
+> roles of its own, so edit both together: `TestRolesMatchDocs` in
+> `roles_test.go` fails until they agree. The test parses this file: keep
 > each role as a `## Name (scope)` heading, an optional
 > `Everything a X and a Y has` line, and `- Resource: Verb` bullets.
+> Optional feature modules add permissions to these roles at startup; those
+> grants are not listed here, they are in each feature's own docs.
 
 Roles are cumulative: each role has every permission of the role below it, plus the ones listed under it. In Casbin each role inherits from the one below it, so a permission is defined once.
 
-Verbs are `Read`, `Create`, `Patch` and `Delete`, with two exceptions that each apply to one resource only: `PermissionPrompts: Answer` and `Workflows: Run`.
+Verbs are `Read`, `Create`, `Patch` and `Delete`, with two exceptions that each apply to one resource only: `PermissionPrompts: Answer` and `Workflows: Run`. A resource and its extra verbs are registered in `Resources()` in `roles.go`.
 
 No role can read secret values - this is intentional. Secrets can be written and deleted, but their values only ever reach agents.
 

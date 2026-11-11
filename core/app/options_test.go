@@ -81,15 +81,16 @@ func TestOpenAPILogoutHasNoCookieParameter(t *testing.T) {
 
 func TestOptionsAreValidated(t *testing.T) {
 	for name, o := range map[string]Options{
-		"no name":          {EnvPrefix: "A", CookiePrefix: "a"},
-		"no env prefix":    {Name: "a", CookiePrefix: "a"},
-		"no cookie prefix": {Name: "a", EnvPrefix: "A"},
+		"no name":          {EnvPrefix: "A", CookiePrefix: "a", Roles: testOpts.Roles},
+		"no env prefix":    {Name: "a", CookiePrefix: "a", Roles: testOpts.Roles},
+		"no cookie prefix": {Name: "a", EnvPrefix: "A", Roles: testOpts.Roles},
+		"no roles":         {Name: "a", EnvPrefix: "A", CookiePrefix: "a"},
 	} {
 		if _, err := OpenAPISpec(o); err == nil {
 			t.Errorf("%s: OpenAPISpec accepted %+v", name, o)
 		}
 	}
-	got, err := Options{Name: "a", EnvPrefix: "A", CookiePrefix: "a"}.validate()
+	got, err := Options{Name: "a", EnvPrefix: "A", CookiePrefix: "a", Roles: testOpts.Roles}.validate()
 	if err != nil || got.Version != "0.0.0" {
 		t.Errorf("validate = %+v, %v, want the default version 0.0.0", got, err)
 	}

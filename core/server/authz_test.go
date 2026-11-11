@@ -40,9 +40,9 @@ func TestBuildRefusesRoutesItCannotAuthorize(t *testing.T) {
 		router *Router
 		perm   Permission
 	}{
-		"authenticated, no session store": {NewRouter("t", "0"), Authenticated},
-		"role, no session store":          {NewRouter("t", "0"), projectsRead},
-		"role, no authorizer":             {NewRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie), projectsRead},
+		"authenticated, no session store": {testRouter("t", "0"), Authenticated},
+		"role, no session store":          {testRouter("t", "0"), projectsRead},
+		"role, no authorizer":             {testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie), projectsRead},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -55,11 +55,11 @@ func TestBuildRefusesRoutesItCannotAuthorize(t *testing.T) {
 		})
 	}
 	// Public needs nothing, and Authenticated needs no authorizer.
-	r := NewRouter("t", "0")
+	r := testRouter("t", "0")
 	if _, err := r.Build(nil); err != nil {
 		t.Fatalf("Build of a public-only router: %v", err)
 	}
-	r = NewRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
+	r = testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/x", Authenticated), okHandler); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestBuildRefusesRoutesItCannotAuthorize(t *testing.T) {
 func TestAuthenticatedRoute(t *testing.T) {
 	var buf bytes.Buffer
 	store := newMemStore()
-	r := NewRouter("t", "0").WithAuth(store, nil, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(store, nil, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(nil, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestAuthenticatedRoute(t *testing.T) {
 func TestRoleRouteAsksTheAuthorizer(t *testing.T) {
 	var buf bytes.Buffer
 	g := &grants{allowed: map[string]bool{}}
-	r := NewRouter("t", "0").WithAuth(newMemStore(), g, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(newMemStore(), g, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/projects", projectsRead), okHandler); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestRoleRouteAsksTheAuthorizer(t *testing.T) {
 }
 
 func TestPlainHandlerRouteIsGuardedToo(t *testing.T) {
-	r := NewRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
+	r := testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie)
 	reached := false
 	if err := RegisterHandler(r, op(http.MethodGet, "/plain", Authenticated), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
