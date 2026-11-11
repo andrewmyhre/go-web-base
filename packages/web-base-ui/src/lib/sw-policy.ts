@@ -11,9 +11,12 @@
 /** Paths the API serves (the dev ingress sends these to the API). */
 export const API_PREFIXES = ['/auth', '/me', '/health', '/openapi.json'] as const;
 
-/** True for a path the API owns: a prefix itself, or below it as a segment. */
-export function isApiPath(pathname: string): boolean {
-	return API_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/'));
+/**
+ * True for a path the API owns: a prefix itself, or below it as a segment.
+ * `extraPrefixes` are the project's own API paths beyond the base ones.
+ */
+export function isApiPath(pathname: string, extraPrefixes: readonly string[] = []): boolean {
+	return [...API_PREFIXES, ...extraPrefixes].some((p) => pathname === p || pathname.startsWith(p + '/'));
 }
 
 /**
@@ -30,11 +33,16 @@ export interface RequestLike {
 	mode: string;
 }
 
-export function strategyFor(req: RequestLike, origin: string, precached: ReadonlySet<string>): Strategy {
+export function strategyFor(
+	req: RequestLike,
+	origin: string,
+	precached: ReadonlySet<string>,
+	extraApiPrefixes: readonly string[] = []
+): Strategy {
 	if (req.method !== 'GET') return 'bypass';
 	const url = new URL(req.url);
 	if (url.origin !== origin) return 'bypass';
-	if (isApiPath(url.pathname)) return 'bypass';
+	if (isApiPath(url.pathname, extraApiPrefixes)) return 'bypass';
 	// Navigations first, even to a precached path such as `/`, so a deploy
 	// reaches an online browser on its next load.
 	if (req.mode === 'navigate') return 'shell';

@@ -28,7 +28,10 @@ owns, docs, deploy manifests, CI and the UI. See [core/README.md](core/README.md
   [features/example](features/example/README.md).
 - `GET /me` and `POST /auth/logout`.
 - A SvelteKit 2 / Svelte 5 PWA in `ui/`, whose API client is generated from the
-  API's OpenAPI document. Drift fails CI.
+  API's OpenAPI document (drift fails CI). Its reusable parts (account menu,
+  avatar, side menu, API helpers, service worker policy) come from the
+  `@andrewmyhre/web-base-ui` package in `packages/web-base-ui/`, pinned by
+  URL in `ui/package.json`. See [packages/web-base-ui/README.md](packages/web-base-ui/README.md).
 - Postgres via pgx, sqlc and goose. Redis via go-redis.
 - zap logging with scopes `api`, `rbac`, `queue` and `agent`, for Loki, with a
   Grafana dashboard in `deploy/grafana/`.
@@ -147,26 +150,45 @@ are your answers.
 
 ### Releasing
 
-Core, every feature module and the template share one version number (lockstep).
-Core is tagged `core/vX.Y.Z` (the Go convention for a module in a subdirectory),
-each feature `features/<name>/vX.Y.Z`, and the template `vX.Y.Z`, one commit
-later, once it pins them. From a clean, green `main`:
+Core, every feature module, the UI package and the template share one version
+number (lockstep). Core is tagged `core/vX.Y.Z` (the Go convention for a module
+in a subdirectory), each feature `features/<name>/vX.Y.Z`, the UI package is a
+GitHub release `ui/vX.Y.Z`, and the template is tagged `vX.Y.Z`, one commit
+later, once it pins them all. From a clean, green `main`:
 
 ```sh
 scripts/release.sh v0.3.0
 ```
 
-The script tags and pushes `core/v0.3.0` and waits until `proxy.golang.org`
-serves it. On a `release/v0.3.0` branch it then makes `features/example/go.mod`
-require that core (the in-repo `replace` stays), commits that, tags and pushes
+The script tags and pushes `core/v0.3.0`, waits until `proxy.golang.org`
+serves it, then builds, tests and packs `packages/web-base-ui` at `0.3.0`
+(`pnpm pack`, from a copy, so `main` stays at version `0.0.0`) and creates the
+GitHub release `ui/v0.3.0` with `andrewmyhre-web-base-ui-0.3.0.tgz` attached,
+using your `gh` login. No registry or token is involved: generated projects
+depend on the tarball's download URL,
+`https://github.com/andrewmyhre/go-web-base/releases/download/ui%2Fv0.3.0/andrewmyhre-web-base-ui-0.3.0.tgz`.
+On a `release/v0.3.0` branch it then makes `features/example/go.mod` require
+that core (the in-repo `replace` stays), commits that, tags and pushes
 `features/example/v0.3.0` from that commit, and waits for the proxy to serve it
-too. It pins the template to core and to each feature, renders a sample with
-every feature on to record `template/go.sum` (so it holds the hashes of all
-of them), and pushes the branch. Open a PR from that branch and merge it with
-a merge commit, not a squash, so the feature tag's commit stays in `main`'s
-history. Then tag the merge commit `v0.3.0`. The tag's pipeline runs
-`release-check`, which builds and tests samples with every feature off and on
-against the published modules with no `replace` and a read-only `go.sum`.
+too. It pins the template to core, to each feature and to the UI URL, renders a
+sample with every feature on to record `template/go.sum` (so it holds the
+hashes of all of them) and `template/ui/pnpm-lock.yaml` (made by installing
+that sample's UI against the real URL, then checked with `--frozen-lockfile`;
+one lockfile serves every render, since a feature changes only `openapi.json`
+and `openapi.d.ts`, not the UI's dependencies), and pushes the branch. Open a
+PR from that branch and merge it with a merge commit, not a squash, so the
+feature tag's commit stays in `main`'s history. Then tag the merge commit
+`v0.3.0`. The tag's pipeline runs `release-check`, which builds and tests
+samples with every feature off and on against the published modules with no
+`replace` and a read-only `go.sum`, and `release-check-ui`, which installs
+each sample's UI from the release URL with a frozen lockfile and runs its
+checks.
+
+Re-running the script skips what exists: the core tag, the feature tags and
+the `ui/vX.Y.Z` release. Until the first release, the template pins the
+`ui/v0.2.0` URL, which does not exist yet, and its `ui/pnpm-lock.yaml` does not
+match; the pipeline's `ui` steps do not use either (below), and `release.sh`
+fixes both.
 
 Semver applies to core's exported Go API and to the `app.Options` and feature
 contract. Before `v1`, a minor version may break them; say how in the release
@@ -185,12 +207,20 @@ same release. Each feature module states the core it requires in its own
 - in `sample/`, runs `go mod edit -replace github.com/andrewmyhre/go-web-base/core=../core`
   and `go mod tidy`, so the template is tested against the core in the same
   commit, then `gofmt`, `go vet` and `go test`;
-- runs the UI's `check:client`, `test`, `check` and `build`;
+- in `ui-package`, installs, builds, tests, type-checks and packs
+  `packages/web-base-ui` (committed version `0.0.0`);
+- in the `ui` step, points the sample's `@andrewmyhre/web-base-ui` dependency
+  at that local tarball (`pnpm pkg set` to a `file:` path, then a non-frozen
+  install, since the pinned release URL may not exist yet), so the template is
+  tested against the UI package in the same commit, then runs `check:client`,
+  `test`, `check` and `build`;
 - does all of that twice, in parallel: `sample/` with every feature off (the
-  defaults) and `sample-features/` with every feature on. With a feature on,
-  the Go step also replaces `github.com/andrewmyhre/go-web-base/features/<name>`
-  with the in-repo path. A sweep fails the build if feature glue appears in
-  `sample/`;
+  defaults) and `sample-features/` with every feature on (steps `go` and `ui`,
+  and `go-features` and `ui-features`). With a feature on, the Go step also
+  replaces `github.com/andrewmyhre/go-web-base/features/<name>` with the
+  in-repo path. A sweep fails the build if feature glue appears in `sample/`;
+- on a `v*` tag, `release-check-ui` runs the same UI checks in the untouched
+  samples with the pinned URL and a frozen lockfile;
 - tests `core/` and `features/example` against real Postgres and Redis
   services.
 
@@ -207,7 +237,12 @@ cd /tmp/sample
 go mod edit -replace github.com/andrewmyhre/go-web-base/core=/path/to/go-web-base/core
 go mod tidy
 test -z "$(gofmt -l .)" && go vet ./... && go test ./...
-cd ui && pnpm install --frozen-lockfile && pnpm run check:client && pnpm test && pnpm check && pnpm build
+(cd /path/to/go-web-base/packages/web-base-ui && pnpm install --frozen-lockfile \
+  && pnpm build && pnpm pack --pack-destination /tmp)   # makes /tmp/andrewmyhre-web-base-ui-0.0.0.tgz
+cd ui
+pnpm pkg set "dependencies.@andrewmyhre/web-base-ui=file:/tmp/andrewmyhre-web-base-ui-0.0.0.tgz"
+pnpm install --no-frozen-lockfile
+pnpm run check:client && pnpm test && pnpm check && pnpm build
 ```
 
 ### Regression control

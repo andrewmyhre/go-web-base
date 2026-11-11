@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 
-vi.mock('$app/state', () => ({ page: { url: new URL('https://[[ ident ]].test/') } }));
+vi.mock('$app/state', () => ({ page: { url: new URL('https://app.test/') } }));
 
 import SideMenu from './SideMenu.svelte';
 
