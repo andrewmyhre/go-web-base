@@ -1,0 +1,3 @@
+# Local development against an unreleased go-web-base: never commit these.
+go.work
+go.work.sum

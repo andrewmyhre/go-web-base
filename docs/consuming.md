@@ -11,10 +11,14 @@ The model below is the target design, tracked in epic
 [IMM-2066](https://linear.app/immutablesoftware/issue/IMM-2066). Today the
 shared server code is the `core` Go module in this repository, and a project
 generated from the current template imports it, and the reusable UI is the
-`@andrewmyhre/web-base-ui` package. Dependabot and the feature UI packages are
-not done yet. Projects generated at `v0.1.x` still carry
+`@andrewmyhre/web-base-ui` package. Dependabot for Go modules and local
+development across the base and a project are available now; the feature UI
+packages are not done yet. Projects generated at `v0.1.x` still carry
 their own copies; `copier update` moves them onto core. Each section says which parts are **available now** and which are
 **planned**, with the issue that delivers them.
+
+The repository is public, so consumers, CI and image builds need no GitHub
+credential to fetch the Go modules, the UI package or the template.
 
 ## The model
 
@@ -25,7 +29,7 @@ kind of content.
 |---|---|---|
 | Carries | shared code: server, sign-in, RBAC, logging, Redis, Postgres, config, features, reusable UI | your project's own files: `main.go` wiring, config values, deploy manifests, CI, docs |
 | Lives in your repo as | a version in `go.mod`, and a release URL in `ui/package.json` | real files you own and edit |
-| You update with | `uvx copier@9.19.1 update` for the UI package; `go get -u` or (later) a Dependabot PR for Go | `uvx copier@9.19.1 update` |
+| You update with | `uvx copier@9.19.1 update` for the UI package; `go get -u` or a Dependabot PR for Go | `uvx copier@9.19.1 update` |
 | Conflicts | none: you never edit package code | a three-way merge with your edits |
 
 The rule behind the split: **code you would never edit is a package; code you
@@ -43,8 +47,7 @@ The UI package is `@andrewmyhre/web-base-ui` (**available now**, source in
 `packages/web-base-ui/`): the account menu, avatar, side menu, user badge,
 typed API client helpers and the service worker policy. It is not on an npm
 registry. Each release attaches its tarball to a GitHub release `ui/vX.Y.Z`,
-and the template's `ui/package.json` depends on that file's URL, so it needs no
-token. Because the URL is pinned by the template, UI updates arrive through
+and the template's `ui/package.json` depends on that file's URL. Because the URL is pinned by the template, UI updates arrive through
 `copier update`. Feature UI packages, such as `@andrewmyhre/web-base-agent-ui`,
 are **planned** (IMM-2076, IMM-2077).
 
@@ -74,9 +77,29 @@ of a minor version before `v1` and of any major version: they say how exports
 or CSS class names changed.
 
 **Go module updates.** Bump `core` with `go get github.com/andrewmyhre/go-web-base/core@vX.Y.Z`
-(or `copier update`, which also moves the pin). **Planned (IMM-2078):**
-Dependabot opens a grouped PR for new Go module versions. Your CI runs on it
-like any other PR; read the changelog for a major version before you merge.
+(or `copier update`, which also moves the pin).
+
+**Dependabot (available now).** A generated project has
+`.github/dependabot.yml`. GitHub runs Dependabot version updates for any
+repository that holds this file on its default branch, so there is nothing to
+switch on in the repository settings. (Dependabot alerts and security updates
+are separate settings under Settings, Code security, and are worth enabling.)
+Weekly, it opens at most two PRs for Go:
+
+- one that moves every `github.com/andrewmyhre/go-web-base/*` module together.
+  Core and the features share a release number and must be bumped as a set;
+- one that moves all other Go dependencies.
+
+Your CI runs on them like any other PR; read the release notes for a major
+version before you merge, and run `copier update` as well when they say the
+template glue changed.
+
+The file does not cover npm, on purpose. The UI package is pinned by a release
+URL that Dependabot cannot bump, and the rest of `ui/` (its dependency
+versions and `ui/pnpm-lock.yaml`) comes from the template, so a Dependabot bump
+would conflict with the next `copier update` merge. UI and template changes
+arrive through `copier update`. If you would rather own the UI dependencies,
+add an `npm` entry with `directory: /ui` and accept that merge noise.
 
 **Template updates (available now).** When the template's glue changes, and
 for every release of the UI package, run from a clean working tree:
@@ -238,30 +261,77 @@ script, and in this repository it builds against `../../core` through a
   contract or a package's exports is a major bump. Before `v1`, a minor bump may
   break, and the changelog says how.
 
-## Private access
+## Access
 
-**Planned: IMM-2069.** The modules and packages are private, so every machine
-that builds a project needs access:
-
-- Go: `GOPRIVATE=github.com/andrewmyhre/*`, plus a `.netrc` for `github.com`.
-- npm: nothing, while go-web-base is public. The UI package is a release
-  tarball downloaded by URL. If the repository ever goes private, the URL
-  needs an authenticated download and this section is the place to add it.
-- In Woodpecker, the generated pipeline mints a short-lived kit-pai-app token
-  in the step and writes the `.netrc` from it. Never store the token.
+go-web-base is a public repository, so consumers, CI and image builds need no
+GitHub credential: the Go proxy serves the modules and the UI package is a
+public release download.
 
 ## Working on the base and a project together
 
-**Planned: IMM-2079.** To try an unreleased change to go-web-base in your
-project without publishing it:
+**Available now.** To try an unreleased change to go-web-base in your project
+without publishing it, check both repositories out side by side. The paths
+below assume `~/src/go-web-base` and a project in `~/src/my-app`; use your own.
+
+**Go.** From the project root, add a workspace that uses the local core (and
+each feature module you have enabled):
 
 ```sh
-go work init . ../go-web-base/core
-# ui/package.json: "@andrewmyhre/web-base-ui": "link:../../go-web-base/packages/web-base-ui"
+cd ~/src/my-app
+go work init . ~/src/go-web-base/core
+go work use ~/src/go-web-base/features/example   # only if feature_example is on
+go build ./... && go test ./...
 ```
 
-Remove the `go.work` file and the `link:` before you commit. CI must build
-against published versions.
+The workspace replaces the version in `go.mod`, so edits under
+`go-web-base/core` take effect on the next build with nothing to publish.
+`go list -m github.com/andrewmyhre/go-web-base/core` prints no version while
+it is active. Tried on a project rendered from this branch: with the pinned
+core release published, `go work init . <path>/core` built with no other
+change. While the release a project pins does not exist yet (a fresh template
+before its first release), Go cannot read that version's `go.mod` and the
+build fails, so cut the release first. The workspace also puts a `go.work` in
+the project; the template's `.gitignore` and `.dockerignore` list `go.work` and
+`go.work.sum`, so neither is committed nor sent to an image build. To undo it,
+delete both files: `rm go.work go.work.sum`.
+
+**UI.** Build the package, then link it into the project's UI:
+
+```sh
+cd ~/src/go-web-base/packages/web-base-ui
+pnpm install --frozen-lockfile && pnpm build
+cd ~/src/my-app/ui
+pnpm pkg set "dependencies.@andrewmyhre/web-base-ui=link:$HOME/src/go-web-base/packages/web-base-ui"
+pnpm install --no-frozen-lockfile
+pnpm check && pnpm build
+```
+
+`link:` symlinks the directory, so after each change run `pnpm build` in the
+package again and the project picks the new `dist/` up. Tried: `pnpm check` and
+`pnpm build` passed in the project, and an edit to `AccountMenu.svelte`,
+rebuilt in the package, showed up in the project's next `pnpm build` with no
+reinstall. A packed tarball also works, with `pnpm pack` in the package and
+`file:<path>/andrewmyhre-web-base-ui-0.0.0.tgz` as the dependency, which is
+what the template's CI does. It installs a copy, though, so every change needs
+a new pack and install. Prefer `link:` for day to day work.
+
+**Undo before you commit.** `pnpm pkg set` and the install rewrite
+`ui/package.json` and `ui/pnpm-lock.yaml`. Restore them, then reinstall:
+
+```sh
+cd ~/src/my-app
+git checkout ui/package.json ui/pnpm-lock.yaml
+pnpm --dir ui install --frozen-lockfile
+rm -f go.work go.work.sum
+```
+
+**How CI catches a forgotten one.** A committed `link:` dependency does not
+match what the pinned lockfile expects, and a CI install is frozen, so
+`pnpm install --frozen-lockfile` fails (tried: it reported that the lockfile
+specifiers do not match `package.json`). A `go.work` is ignored by git, so it
+cannot be committed by accident; if one is force-added, its paths do not exist
+on the CI machine, so `go build` should fail there (not tried). Either way the pipeline builds
+against published versions only.
 
 ## Where to look next
 

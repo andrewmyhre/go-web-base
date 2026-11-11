@@ -6,3 +6,5 @@ ui/node_modules
 ui/build
 ui/.svelte-kit
 ui/.client-check
+go.work
+go.work.sum
