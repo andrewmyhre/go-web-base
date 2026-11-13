@@ -208,6 +208,28 @@ same subject after a failure or on another replica. Set neither and nothing
 changes, so an existing project is unaffected by upgrading. See
 [core/README.md](../core/README.md#first-sign-in) for the details.
 
+## Background work and the database pool
+
+**Available now** (core `v0.4.0`). An app that runs workers in the API process,
+for example queue consumers, sets `Options.Run` in `cmd/<slug>/main.go`:
+
+- `Run(ctx context.Context, d app.RunDeps) error` starts under `serve` after the
+  database, Redis and migrations are ready and before the listener, with the
+  signal context. `RunDeps` has `Pool` (`*pgxpool.Pool`), `Authorizer` and
+  `Log`. It never runs under `openapi`.
+- Shutdown cancels the context, stops the listener and waits for `Run` to
+  return before it closes the pool, so `Run` must return when the context is
+  cancelled.
+- A non-nil error from `Run` (other than `context.Canceled`), or a panic, is
+  fatal: the listener stops and the process exits non-zero. Retry inside `Run`
+  if a failure should be survivable. A nil return before shutdown is logged and
+  the API keeps serving.
+
+Route handlers reach the same pool through `Deps.Pool` in `Options.Routes`
+(`nil` without a database and under `openapi`, so only capture it, never use it
+while registering). Set neither and nothing changes. See
+[core/README.md](../core/README.md#background-work) for the details.
+
 ## Roles and permissions
 
 **Available now.** Core ships no roles and no resources. Your project defines
@@ -282,7 +304,8 @@ script, and in this repository it builds against `../../core` through a
 - The template is tagged `v0.3.0`.
 - Releases so far: `v0.2.0` and `v0.2.1`; `v0.3.0` adds the first sign-in
   options above, an additive change to `app.Options`, `server.Auth`,
-  `server.CasbinAuthorizer` and `db`. An additive change to exported API is a
+  `server.CasbinAuthorizer` and `db`; `v0.4.0` adds `app.Options.Run`,
+  `app.RunDeps` and `app.Deps.Pool`, additive changes to `app`. An additive change to exported API is a
   minor bump while we are before `v1`, a fix with no API change is a patch.
   The release notes of the GitHub release `ui/vX.Y.Z` say what changed.
 - All follow semver. A breaking change to an exported Go API, the `Install`
