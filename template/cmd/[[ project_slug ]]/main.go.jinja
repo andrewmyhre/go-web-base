@@ -22,6 +22,18 @@ func options() app.Options {
 		// roles.go at the project root. Core ships none of its own.
 		Roles:     project.Roles(),
 		Resources: project.Resources(),
+		// By default a Google account with no role binding cannot sign in. To
+		// admit new people, set DefaultRole (a role from roles.go, never
+		// Admin) and/or OnFirstSignIn (import "context" and
+		// "github.com/andrewmyhre/go-web-base/core/server"). The hook gets the
+		// Google Sub and verified Email once per new subject, returns the
+		// role to bind, and must be idempotent. See docs/consuming.md.
+		//
+		// DefaultRole: "Contributor",
+		// OnFirstSignIn: func(ctx context.Context, id server.Identity) (string, error) {
+		// 	return "Contributor", nil
+		// },
+		//
 		// Features are optional modules, each its own Go module. To add one,
 		// go get it, import it, and list it here, naming the role it grants to
 		// where it asks for one. Each feature's migrations run in this order,

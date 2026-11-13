@@ -188,6 +188,26 @@ there is no copy of it in your project to edit. Make the fix in go-web-base's
 `core/` and bump the version in your `go.mod`. Projects still on the old
 copied layout (template `v0.1.x`) get core by running `copier update`.
 
+## Admitting new users (first sign-in)
+
+**Available now** (core `v0.3.0`). Core refuses a Google account that has no
+role binding. An app that wants to admit new people, for example one that
+creates an account on a person's first sign-in, sets one or both of these in
+`app.Options` (in `cmd/<slug>/main.go`):
+
+- `DefaultRole`: the role every new subject is bound to, globally. It must be a
+  role in `Roles`, and not `Admin`.
+- `OnFirstSignIn(ctx, server.Identity) (role string, err error)`: runs once per
+  new subject, with the Google `Sub`, the verified `Email` (empty if
+  unverified), `Name` and `Picture`. Create your own account row there and
+  return the role (empty means `DefaultRole`). An error refuses the sign-in
+  (`server.ErrSignInRefused` for a 403, anything else a retryable 503).
+
+Make the hook idempotent (an upsert keyed on `Sub`): it can run again for the
+same subject after a failure or on another replica. Set neither and nothing
+changes, so an existing project is unaffected by upgrading. See
+[core/README.md](../core/README.md#first-sign-in) for the details.
+
 ## Roles and permissions
 
 **Available now.** Core ships no roles and no resources. Your project defines
@@ -260,6 +280,11 @@ script, and in this repository it builds against `../../core` through a
 - The UI package is released as the GitHub release `ui/v0.3.0` (available
   now), with the same number as core.
 - The template is tagged `v0.3.0`.
+- Releases so far: `v0.2.0` and `v0.2.1`; `v0.3.0` adds the first sign-in
+  options above, an additive change to `app.Options`, `server.Auth`,
+  `server.CasbinAuthorizer` and `db`. An additive change to exported API is a
+  minor bump while we are before `v1`, a fix with no API change is a patch.
+  The release notes of the GitHub release `ui/vX.Y.Z` say what changed.
 - All follow semver. A breaking change to an exported Go API, the `Install`
   contract or a package's exports is a major bump. Before `v1`, a minor bump may
   break, and the changelog says how.
