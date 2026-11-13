@@ -57,6 +57,8 @@ func main() {
 | `CookiePrefix` | yes | Cookies `<prefix>_session` and `<prefix>_oauth_state`, and Redis keys `<prefix>:session:` and `<prefix>:signin:`. Use a cookie-safe token. |
 | `Roles` | yes | The role graph, `[]db.RoleDef{Name, Inherits, Permissions}` with permissions as `"Resource: Verb"`. Core ships none. It must define `db.AdminRole` (`"Admin"`), which `<PREFIX>_ADMIN_SUB` is bound to. See below. |
 | `Resources` | no | The app's resources, `[]server.ResourceDef{Name, Verbs}`. Every permission in `Roles` and on a route must name a registered resource. |
+| `DefaultRole` | no | The role a subject with no binding is given, globally, the first time it signs in. Must be a role in `Roles`, and not `Admin`. Unset keeps the refuse-by-default. See "First sign-in". |
+| `OnFirstSignIn` | no | `func(ctx, server.Identity) (role string, err error)`, run when a subject with no binding signs in, to create the app's own account. See "First sign-in". |
 | `Migrations` | no | The app's own goose migrations, an `fs.FS` with `*.sql` at its root. Run last, in `goose_app_version`. |
 | `Features` | no | Optional modules, `[]app.Feature`, installed in order. See below. |
 | `Routes` | no | The app's own routes, registered after the built-ins and the features' routes. It gets `app.Deps` (session store, authorizer, role reader, auth, logger). Every route must go through `server.Register` or `server.RegisterHandler` with a permission, or `Build` refuses it. |
@@ -103,8 +105,45 @@ that applies to it, or the app fails with the role and permission. And
 resource or verb, or none at all, cannot be served. A route may be registered
 before the resource it names, so long as the resource exists by `Build`.
 
-The admin bootstrap and sign-in are unchanged: `<PREFIX>_ADMIN_SUB` is bound
-to `Admin` in the global domain, and a user with no role binding cannot sign in.
+The admin bootstrap is unchanged: `<PREFIX>_ADMIN_SUB` is bound to `Admin` in
+the global domain. A user with no role binding cannot sign in, unless the app
+registers a first sign-in rule (next section).
+
+### First sign-in
+
+By default a subject with no role binding is refused at sign-in. An app that
+admits new users sets `DefaultRole`, `OnFirstSignIn`, or both:
+
+```go
+app.Options{
+	DefaultRole: "Member", // optional fallback
+	OnFirstSignIn: func(ctx context.Context, id server.Identity) (string, error) {
+		// id.Sub is the Google account id, id.Email is set only when Google
+		// says it is verified, id.Name and id.Picture are for display.
+		if err := createAccount(ctx, id.Sub, id.Email, id.Name); err != nil { // an upsert
+			return "", err
+		}
+		return "Member", nil // "" means DefaultRole
+	},
+}
+```
+
+- It runs only when the subject has no binding in any domain, after Google has
+  verified the ID token and before a session is created. A subject that is
+  already bound never reaches it.
+- The role is bound globally (`db.BindRole`), so the subject holds it in every
+  project, and the binding is stored in Postgres: the next sign-in finds it.
+- An error refuses the sign-in and binds nothing. Return `server.ErrSignInRefused`
+  for a deliberate no (403, "you cannot sign in to `<Name>`"); any other error is
+  a 503 and the user can try again.
+- Two first sign-ins of one subject at the same moment, in one process, run the
+  hook once and leave one binding. The hook can still run more than once for a
+  subject (a retry after a failed bind, another replica), so make it idempotent,
+  for example an upsert keyed on `Sub`. Binding is idempotent too.
+- With neither option set, nothing changes: unbound subjects get a 403.
+- Bindings are read from memory per process, as before: a replica that did not
+  bind the subject learns of the binding only at its next start or when the
+  subject signs in there. Run one API replica, or accept that.
 
 ### Migrations
 

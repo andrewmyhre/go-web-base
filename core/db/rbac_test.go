@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/casbin/casbin/v2"
@@ -383,5 +384,61 @@ func TestRolePermissionsFlattens(t *testing.T) {
 	}
 	if !slices.IsSorted(got[AdminRole]) {
 		t.Error("Admin permissions are not sorted")
+	}
+}
+
+// TestBindRole proves first sign-in's binding: a subject with none gets the
+// role globally, binding it twice (or from two goroutines at once) leaves
+// one stored row, the binding survives a restart, and a role the graph does
+// not define, a role name as subject and an empty subject are refused.
+func TestBindRole(t *testing.T) {
+	pool, _ := testAdapter(t)
+	e := mustEnforcer(t, pool, "")
+	if ok, _ := HasRoleBinding(e, "newcomer"); ok {
+		t.Fatal("newcomer is bound before BindRole")
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = BindRole(e, "newcomer", "Contributor")
+			_, _ = HasRoleBinding(e, "newcomer") // a read racing the writes
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("BindRole #%d: %v", i, err)
+		}
+	}
+	if ok, err := HasRoleBinding(e, "newcomer"); err != nil || !ok {
+		t.Fatalf("HasRoleBinding after BindRole = %v, %v; want true", ok, err)
+	}
+	wantAuth(t, e, "newcomer", "proj-1", "Projects", "Read", true)
+	wantAuth(t, e, "newcomer", "proj-1", "Secrets", "Create", false)
+	if _, g := casbinRows(t, pool); g != 1 {
+		t.Errorf("g rows = %d, want 1 after 8 concurrent binds", g)
+	}
+	if ok, err := HasRoleBinding(mustEnforcer(t, pool, ""), "newcomer"); err != nil || !ok {
+		t.Errorf("after restart HasRoleBinding = %v, %v; want true", ok, err)
+	}
+
+	if err := BindRole(e, "x", "No Such Role"); !errors.Is(err, ErrUnknownRole) {
+		t.Errorf("BindRole of an undefined role = %v, want ErrUnknownRole", err)
+	}
+	if err := BindRole(e, "x", ""); !errors.Is(err, ErrUnknownRole) {
+		t.Errorf("BindRole of an empty role = %v, want ErrUnknownRole", err)
+	}
+	if ok, _ := HasRoleBinding(e, "x"); ok {
+		t.Error("a refused BindRole left a binding")
+	}
+	if err := BindRole(e, "Contributor", "Contributor"); !errors.Is(err, ErrSubjectIsRole) {
+		t.Errorf("BindRole of a role name as subject = %v, want ErrSubjectIsRole", err)
+	}
+	if err := BindRole(e, "", "Contributor"); !errors.Is(err, ErrEmptySubject) {
+		t.Errorf("BindRole of an empty subject = %v, want ErrEmptySubject", err)
 	}
 }

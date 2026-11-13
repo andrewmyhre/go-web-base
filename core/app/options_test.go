@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewmyhre/go-web-base/core/db"
 	"github.com/andrewmyhre/go-web-base/core/server"
 )
 
@@ -103,5 +104,29 @@ func TestServeFlagsNameTheEnvPrefix(t *testing.T) {
 	}
 	if usage := cmd.Flags().Lookup("addr").Usage; !strings.Contains(usage, "TESTAPP_ADDR") {
 		t.Errorf("--addr usage = %q, want it to name TESTAPP_ADDR", usage)
+	}
+}
+
+// TestDefaultRoleMustBeARole: a DefaultRole the graph does not define is
+// refused at startup, not at the first sign-in; a defined one, and none,
+// are accepted.
+func TestDefaultRoleMustBeARole(t *testing.T) {
+	o := testOpts
+	o.DefaultRole = "No Such Role"
+	if _, err := OpenAPISpec(o); err == nil || !strings.Contains(err.Error(), "DefaultRole") {
+		t.Errorf("OpenAPISpec with an undefined DefaultRole = %v, want a DefaultRole error", err)
+	}
+	o.DefaultRole = db.AdminRole
+	if _, err := OpenAPISpec(o); err == nil {
+		t.Error("OpenAPISpec accepted Admin as the DefaultRole")
+	}
+	o.Roles = []db.RoleDef{{Name: db.AdminRole, Permissions: []string{"Projects: Read"}}, {Name: "Member", Permissions: []string{"Projects: Read"}}}
+	o.DefaultRole = "Member"
+	if _, err := OpenAPISpec(o); err != nil {
+		t.Errorf("OpenAPISpec with a defined DefaultRole: %v", err)
+	}
+	o.DefaultRole = ""
+	if _, err := OpenAPISpec(o); err != nil {
+		t.Errorf("OpenAPISpec with no DefaultRole: %v", err)
 	}
 }

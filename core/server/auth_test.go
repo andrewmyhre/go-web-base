@@ -141,6 +141,7 @@ type signInRig struct {
 	google             *fakeGoogle
 	sessions, attempts *memStore
 	bindings           *bindings
+	auth               *Auth
 	h                  http.Handler
 	logs               *bytes.Buffer
 }
@@ -155,7 +156,7 @@ const fakeSub = "112233445566778899000"
 
 // newSignInRigWith is newSignInRig with b as the sign-in gate's bindings;
 // a nil b leaves the gate with none.
-func newSignInRigWith(t *testing.T, b *bindings) *signInRig {
+func newSignInRigWith(t *testing.T, b *bindings, configure ...func(*Auth)) *signInRig {
 	t.Helper()
 	rig := &signInRig{google: newFakeGoogle(t), sessions: newMemStore(), attempts: newMemStore(), bindings: b, logs: &bytes.Buffer{}}
 	g, err := NewGoogle(rig.google.config())
@@ -168,6 +169,10 @@ func newSignInRigWith(t *testing.T, b *bindings) *signInRig {
 		rb = b
 	}
 	auth := NewAuth(g, rig.sessions, rig.attempts, rb, log, fakeClientSecret, testNames)
+	for _, c := range configure {
+		c(auth)
+	}
+	rig.auth = auth
 	r := testRouter("t", "0").WithAuth(rig.sessions, nil, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(nil, nil)); err != nil {
 		t.Fatal(err)

@@ -121,12 +121,30 @@ func (g *grants) Authorize(sub, domain, object, action string) (bool, error) {
 // bindings is a RoleBindings over a set of bound subjects. It returns err
 // when that is set.
 type bindings struct {
-	bound map[string]bool
-	err   error
-	calls []string
+	mu      sync.Mutex
+	bound   map[string]bool
+	err     error
+	bindErr error
+	calls   []string
+	binds   []string // "sub|role" for every BindRole call
+}
+
+// BindRole implements RoleBinder: it binds sub, idempotently, and records
+// the call.
+func (b *bindings) BindRole(sub, role string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.binds = append(b.binds, sub+"|"+role)
+	if b.bindErr != nil {
+		return b.bindErr
+	}
+	b.bound[sub] = true
+	return nil
 }
 
 func (b *bindings) HasRoleBinding(sub string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.calls = append(b.calls, sub)
 	if b.err != nil {
 		return false, b.err

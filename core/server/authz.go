@@ -38,6 +38,18 @@ func (a CasbinAuthorizer) HasRoleBinding(sub string) (bool, error) {
 	return db.HasRoleBinding(a.Enforcer, sub)
 }
 
+// RoleBinder binds a subject to a role. First sign-in asks it to give a new
+// subject the role the app chose. It must be idempotent: binding a subject
+// that already holds the role is not an error.
+type RoleBinder interface {
+	BindRole(sub, role string) error
+}
+
+// BindRole implements RoleBinder with db.BindRole.
+func (a CasbinAuthorizer) BindRole(sub, role string) error {
+	return db.BindRole(a.Enforcer, sub, role)
+}
+
 // RoleReader lists the roles a subject is bound to, in every domain. GET
 // /me reads it so the account view shows the roles the user really holds.
 type RoleReader interface {

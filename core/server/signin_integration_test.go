@@ -120,6 +120,13 @@ const integrationAdmin = "100000000000000000099"
 
 func newIntegrationRig(t *testing.T) *integrationRig {
 	t.Helper()
+	return newIntegrationRigWith(t, nil)
+}
+
+// newIntegrationRigWith is newIntegrationRig with configure applied to the
+// Auth before its routes are built.
+func newIntegrationRigWith(t *testing.T, configure func(*Auth, CasbinAuthorizer)) *integrationRig {
+	t.Helper()
 	client, prefix := testRedis(t)
 	rig := &integrationRig{
 		google:   newFakeGoogle(t),
@@ -137,6 +144,9 @@ func newIntegrationRig(t *testing.T) *integrationRig {
 	authz := CasbinAuthorizer{Enforcer: rig.enforcer}
 	log := bufferLogger(rig.logs)
 	auth := NewAuth(g, rig.sessions, attempts, authz, log, fakeClientSecret, testNames)
+	if configure != nil {
+		configure(auth, authz)
+	}
 	r := testRouter("t", "0").WithAuth(rig.sessions, authz, testNames.SessionCookie)
 	if err := Register(r, op(http.MethodGet, "/me", Authenticated), NewMe(authz, log)); err != nil {
 		t.Fatal(err)
@@ -356,4 +366,41 @@ var integrationRoles = []db.RoleDef{
 	{Name: "Contributor", Permissions: []string{"Projects: Read"}},
 	{Name: "Manager", Inherits: []string{"Contributor"}, Permissions: []string{"Projects: Create", "Projects: Patch", "Projects: Delete"}},
 	{Name: db.AdminRole, Inherits: []string{"Manager"}, Permissions: []string{"Workflows: Create"}},
+}
+
+// TestIntegrationFirstSignInBindsTheDefaultRole: over the real enforcer, a
+// subject with no binding who signs in is bound to the default role, holds
+// its permission through HTTP, keeps the binding on the next sign-in, and
+// the same app without a default role still refuses the same subject.
+func TestIntegrationFirstSignInBindsTheDefaultRole(t *testing.T) {
+	const sub = "100000000000000000888"
+	rig := newIntegrationRigWith(t, func(a *Auth, authz CasbinAuthorizer) {
+		a.WithFirstSignIn(nil, "Contributor", authz)
+	})
+	if ok, _ := db.HasRoleBinding(rig.enforcer, sub); ok {
+		t.Fatal("the subject is bound before it signs in")
+	}
+	res := rig.signIn(t, sub)
+	s := sessionCookieOf(res)
+	if res.StatusCode != http.StatusFound || s == nil || s.MaxAge <= 0 {
+		t.Fatalf("first sign-in = %d with cookie %v, want 302 and a session", res.StatusCode, s)
+	}
+	bs, err := db.RoleBindingsOf(rig.enforcer, sub)
+	if err != nil || len(bs) != 1 || bs[0].Role != "Contributor" || bs[0].Domain != db.Global {
+		t.Fatalf("bindings after first sign-in = %v, %v; want Contributor in global", bs, err)
+	}
+	if p := rig.do(http.MethodGet, "/projects", s); p.StatusCode != http.StatusOK {
+		t.Fatalf("GET /projects as the new Contributor = %d, want 200", p.StatusCode)
+	}
+	if again := rig.signIn(t, sub); again.StatusCode != http.StatusFound {
+		t.Fatalf("second sign-in = %d, want 302", again.StatusCode)
+	}
+
+	plain := newIntegrationRig(t)
+	if res := plain.signIn(t, sub); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("sign-in with no hook and no default role = %d, want 403", res.StatusCode)
+	}
+	if ok, _ := db.HasRoleBinding(plain.enforcer, sub); ok {
+		t.Fatal("a refused sign-in left a binding")
+	}
 }

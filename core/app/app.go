@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -69,6 +70,23 @@ type Options struct {
 	// the FS; use fs.Sub on an embed.FS). They run last, after core's and
 	// the features', in the version table goose_app_version. Optional.
 	Migrations fs.FS
+	// DefaultRole is the role a subject with no role binding is given the
+	// first time it signs in, in the global domain. It must be a role
+	// Roles defines. Optional: with neither DefaultRole nor OnFirstSignIn
+	// core keeps its default, which refuses every subject with no binding.
+	// Set it only for an app that is open to any Google account, and make
+	// it a role with little power.
+	DefaultRole string
+	// OnFirstSignIn runs when a subject with no role binding signs in,
+	// before its session exists, so the app can create its own account. It
+	// returns the role to bind (empty means DefaultRole); an error refuses
+	// the sign-in: server.ErrSignInRefused with a 403, any other error with
+	// a 503 that lets the user retry. It receives the Google account id
+	// (Identity.Sub), the verified email (empty if unverified) and name. It
+	// may run more than once for one subject (a retry, or another replica),
+	// so it must be idempotent, e.g. an upsert keyed on Sub. Concurrent
+	// first sign-ins of one subject in a process run it once. Optional.
+	OnFirstSignIn func(ctx context.Context, id server.Identity) (role string, err error)
 	// Features are the optional modules this app installs, in order. The
 	// order is the order their migrations run and their routes register.
 	Features []Feature
@@ -98,6 +116,12 @@ func (o Options) validate() (Options, error) {
 	}
 	if len(o.Roles) == 0 {
 		return o, errors.New("app.Options.Roles is required: core ships no roles, the app supplies its role graph")
+	}
+	if o.DefaultRole == db.AdminRole {
+		return o, fmt.Errorf("app.Options.DefaultRole may not be %q: every new account would be an administrator", db.AdminRole)
+	}
+	if o.DefaultRole != "" && !slices.ContainsFunc(o.Roles, func(r db.RoleDef) bool { return r.Name == o.DefaultRole }) {
+		return o, fmt.Errorf("app.Options.DefaultRole %q is not a role in app.Options.Roles", o.DefaultRole)
 	}
 	return o, nil
 }
@@ -421,6 +445,8 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 		sessions, attempts *redis.Store
 		// bindings is the sign-in gate; it needs the database.
 		bindings server.RoleBindings
+		// binder gives a first-time subject its role, when the app asks.
+		binder server.RoleBinder
 	)
 	if cfg.RedisAddr != "" {
 		client, err := redis.NewClient(ctx, redis.Config{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
@@ -454,6 +480,7 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 		d.Authorizer = authz
 		d.Roles = authz
 		bindings = authz
+		binder = authz
 	}
 
 	if cfg.GoogleClientID == "" {
@@ -472,5 +499,8 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 		return d, cleanup, err
 	}
 	d.Auth = server.NewAuth(google, sessions, attempts, bindings, log, cfg.GoogleClientSecret, o.names())
+	if o.OnFirstSignIn != nil || o.DefaultRole != "" {
+		d.Auth = d.Auth.WithFirstSignIn(o.OnFirstSignIn, o.DefaultRole, binder)
+	}
 	return d, cleanup, nil
 }

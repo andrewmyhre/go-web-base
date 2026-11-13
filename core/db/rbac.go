@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
@@ -346,12 +347,60 @@ func refuseRoleName(e *casbin.Enforcer, sub string) error {
 	return nil
 }
 
+// locks holds one RWMutex per enforcer. A casbin.Enforcer is not safe for a
+// write concurrent with a read, and BindRole writes at sign-in while every
+// request reads, so Authorize, HasRoleBinding, RoleBindingsOf and BindRole
+// take the enforcer's lock. A write made directly on the enforcer (the
+// bootstrap, before serving) bypasses it, which is fine before any request.
+var locks sync.Map // *casbin.Enforcer -> *sync.RWMutex
+
+func lockOf(e *casbin.Enforcer) *sync.RWMutex {
+	l, _ := locks.LoadOrStore(e, &sync.RWMutex{})
+	return l.(*sync.RWMutex)
+}
+
+// ErrUnknownRole is returned by BindRole for a role the loaded graph does
+// not define.
+var ErrUnknownRole = errors.New("role is not defined")
+
+// BindRole binds sub to role in the global domain, so sub passes the
+// sign-in gate and holds the role everywhere. It is idempotent: binding a
+// subject that already holds the role changes nothing and returns nil, so
+// two concurrent first sign-ins of one subject both succeed and leave one
+// binding. It refuses an empty subject, a subject that is a role name, and
+// a role the graph does not define.
+func BindRole(e *casbin.Enforcer, sub, role string) error {
+	if sub == "" {
+		return ErrEmptySubject
+	}
+	l := lockOf(e)
+	l.Lock()
+	defer l.Unlock()
+	if err := refuseRoleName(e, sub); err != nil {
+		return err
+	}
+	rules, err := e.GetFilteredPolicy(0, role)
+	if err != nil {
+		return fmt.Errorf("read role %q: %w", role, err)
+	}
+	if role == "" || len(rules) == 0 {
+		return fmt.Errorf("%w: %q", ErrUnknownRole, role)
+	}
+	if _, err := e.AddGroupingPolicy(sub, role, Global); err != nil {
+		return fmt.Errorf("bind %s to %s: %w", sub, role, err)
+	}
+	return nil
+}
+
 // Authorize reports whether sub may act on object with action in project. A
 // binding in project's own domain applies there; a binding in the global
 // domain applies in every project, so the global domain is checked in
 // addition. It denies, with an error, an empty subject or one that is a role
 // name. Every error is a denial.
 func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, error) {
+	l := lockOf(e)
+	l.RLock()
+	defer l.RUnlock()
 	if sub == "" {
 		return false, ErrEmptySubject
 	}
@@ -379,6 +428,9 @@ func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, e
 // refuses, with an error, an empty subject or one that is a role name, so
 // a role can never sign in as itself. Every error is a refusal.
 func HasRoleBinding(e *casbin.Enforcer, sub string) (bool, error) {
+	l := lockOf(e)
+	l.RLock()
+	defer l.RUnlock()
 	if sub == "" {
 		return false, ErrEmptySubject
 	}
@@ -405,6 +457,9 @@ type Binding struct {
 // empty, non-nil slice. Like HasRoleBinding it refuses, with an error, an
 // empty subject or one that is a role name.
 func RoleBindingsOf(e *casbin.Enforcer, sub string) ([]Binding, error) {
+	l := lockOf(e)
+	l.RLock()
+	defer l.RUnlock()
 	if sub == "" {
 		return nil, ErrEmptySubject
 	}
