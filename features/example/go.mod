@@ -3,7 +3,7 @@ module github.com/andrewmyhre/go-web-base/features/example
 go 1.26.0
 
 require (
-	github.com/andrewmyhre/go-web-base/core v0.3.0
+	github.com/andrewmyhre/go-web-base/core v0.4.0
 	github.com/jackc/pgx/v5 v5.12.0
 	go.uber.org/zap v1.28.0
 )
