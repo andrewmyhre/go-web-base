@@ -34,6 +34,19 @@ func options() app.Options {
 		// 	return "Contributor", nil
 		// },
 		//
+		// Background work in the API process (a queue consumer, a poller):
+		// set Run (import "context"). It starts under serve once the
+		// database is ready and gets d.Pool, d.Authorizer and d.Log. It must
+		// return when ctx is cancelled; shutdown waits for it before closing
+		// the pool, and an error or panic from it stops the server and exits
+		// non-zero. It never runs under openapi. Route handlers get the same
+		// pool as Deps.Pool in Routes. See docs/consuming.md.
+		//
+		// Run: func(ctx context.Context, d app.RunDeps) error {
+		// 	<-ctx.Done()
+		// 	return nil
+		// },
+		//
 		// Features are optional modules, each its own Go module. To add one,
 		// go get it, import it, and list it here, naming the role it grants to
 		// where it asks for one. Each feature's migrations run in this order,

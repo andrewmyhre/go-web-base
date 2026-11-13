@@ -24,10 +24,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
@@ -98,6 +101,40 @@ type Options struct {
 	// function runs for the openapi command, with stand-in Deps, so the
 	// routes must not do work at registration other than registering.
 	Routes func(r *server.Router, d Deps) error
+	// Run is the app's background work: a queue consumer, a scheduler, a
+	// reconciler. Under serve it is started in its own goroutine once the
+	// database, Redis and migrations are ready and before the listener
+	// starts, and it gets the signal context, which is cancelled on
+	// SIGINT or SIGTERM. It should block until that context is cancelled
+	// and then return nil (or the context's error, which is ignored).
+	//
+	// On shutdown serve cancels the context, stops the listener, then
+	// waits for Run to return before it closes the database pool and
+	// Redis, so Run may use d.Pool until it returns. A Run that ignores
+	// cancellation hangs the shutdown.
+	//
+	// A non-nil error (other than context.Canceled) is fatal, whenever it
+	// comes, and so is a panic: it is logged, the listener is stopped,
+	// and serve returns it so the process exits non-zero. A silently dead
+	// consumer behind a healthy-looking API is the worst outcome, so an
+	// app that wants to survive a failure retries inside Run. A nil
+	// return before cancellation is logged and is not fatal: the server
+	// keeps serving.
+	//
+	// It never runs under the openapi command. Optional.
+	Run func(ctx context.Context, d RunDeps) error
+}
+
+// RunDeps are what Options.Run gets. Pool and Authorizer are nil when
+// <EnvPrefix>_DATABASE_DSN is not set.
+type RunDeps struct {
+	// Pool is the Postgres pool serve opened, migrations applied. It is
+	// closed only after Run has returned.
+	Pool *pgxpool.Pool
+	// Authorizer decides role permissions, as for the routes.
+	Authorizer server.Authorizer
+	// Log is the server's logger; never nil.
+	Log *zap.Logger
 }
 
 // validate fills defaults and refuses an Options core cannot run with.
@@ -305,6 +342,12 @@ type Deps struct {
 	Auth *server.Auth
 	// Log is where handlers log; nil logs nothing.
 	Log *zap.Logger
+	// Pool is the Postgres pool, migrations applied, for handlers that
+	// read or write the app's own tables. It is nil when
+	// <EnvPrefix>_DATABASE_DSN is not set, and always nil under the
+	// openapi command (Routes must not touch it at registration). Do not
+	// close it: serve does, after the listener and Options.Run are done.
+	Pool *pgxpool.Pool
 }
 
 // newRouter registers every operation the API serves: the built-ins, then
@@ -404,15 +447,63 @@ func serve(ctx context.Context, inst *installation, cfg config.Config) error {
 		return err
 	}
 	d.Log = log
+	return serveWith(ctx, inst, log, d, func(ctx context.Context, router *server.Router) error {
+		if err := server.New(cfg, log, router).Start(ctx); err != nil {
+			log.Error("server failed", zap.Error(err))
+			return err
+		}
+		return nil
+	})
+}
+
+// serveWith registers the routes and runs the listener together with
+// Options.Run, given connected Deps. The caller closes what d holds after
+// it returns, which is after Run has returned. listen blocks until ctx is
+// cancelled; it is a parameter so the lifecycle can be tested without a
+// network.
+func serveWith(ctx context.Context, inst *installation, log *zap.Logger, d Deps, listen func(context.Context, *server.Router) error) error {
 	router, err := newRouter(inst, d)
 	if err != nil {
 		return fmt.Errorf("register routes: %w", err)
 	}
-	if err := server.New(cfg, log, router).Start(ctx); err != nil {
-		log.Error("server failed", zap.Error(err))
-		return err
+	run := inst.o.Run
+	if run == nil {
+		return listen(ctx, router)
 	}
-	return nil
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg        sync.WaitGroup
+		workerErr error
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				workerErr = fmt.Errorf("background worker panicked: %v\n%s", r, debug.Stack())
+			}
+			if workerErr != nil && !errors.Is(workerErr, context.Canceled) {
+				log.Error("background worker failed", zap.Error(workerErr))
+				cancel() // fatal: stop the listener
+			} else {
+				workerErr = nil
+				if ctx.Err() == nil {
+					log.Warn("background worker returned before shutdown; the server keeps serving")
+				}
+			}
+		}()
+		workerErr = run(ctx, RunDeps{Pool: d.Pool, Authorizer: d.Authorizer, Log: log})
+	}()
+
+	listenErr := listen(ctx, router)
+	cancel()
+	wg.Wait() // the caller closes the pool only after this
+	if listenErr != nil {
+		return listenErr
+	}
+	return workerErr
 }
 
 // connect opens what cfg configures: Redis for sessions, Postgres (after
@@ -472,6 +563,7 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 			return d, cleanup, err
 		}
 		closers = append(closers, pool.Close)
+		d.Pool = pool
 		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub, inst.roles)
 		if err != nil {
 			return d, cleanup, err

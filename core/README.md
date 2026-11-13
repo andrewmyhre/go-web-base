@@ -59,9 +59,10 @@ func main() {
 | `Resources` | no | The app's resources, `[]server.ResourceDef{Name, Verbs}`. Every permission in `Roles` and on a route must name a registered resource. |
 | `DefaultRole` | no | The role a subject with no binding is given, globally, the first time it signs in. Must be a role in `Roles`, and not `Admin`. Unset keeps the refuse-by-default. See "First sign-in". |
 | `OnFirstSignIn` | no | `func(ctx, server.Identity) (role string, err error)`, run when a subject with no binding signs in, to create the app's own account. See "First sign-in". |
+| `Run` | no | `func(ctx, app.RunDeps) error`, the app's background work (a queue consumer, a scheduler). Started under `serve` once the database, Redis and migrations are ready and before the listener; never under `openapi`. See "Background work". |
 | `Migrations` | no | The app's own goose migrations, an `fs.FS` with `*.sql` at its root. Run last, in `goose_app_version`. |
 | `Features` | no | Optional modules, `[]app.Feature`, installed in order. See below. |
-| `Routes` | no | The app's own routes, registered after the built-ins and the features' routes. It gets `app.Deps` (session store, authorizer, role reader, auth, logger). Every route must go through `server.Register` or `server.RegisterHandler` with a permission, or `Build` refuses it. |
+| `Routes` | no | The app's own routes, registered after the built-ins and the features' routes. It gets `app.Deps` (session store, authorizer, role reader, auth, logger, and `Pool`, the Postgres pool, nil without a database and under `openapi`). Every route must go through `server.Register` or `server.RegisterHandler` with a permission, or `Build` refuses it. |
 
 Also exported: `app.NewRootCmd(o)` for a custom CLI, and
 `app.OpenAPISpec(o)` for the exact bytes `my-app openapi` prints. An app
@@ -144,6 +145,38 @@ app.Options{
 - Bindings are read from memory per process, as before: a replica that did not
   bind the subject learns of the binding only at its next start or when the
   subject signs in there. Run one API replica, or accept that.
+
+### Background work
+
+An app that runs more than HTTP (Kafka consumers, a poller) in the same
+process sets `Options.Run`:
+
+```go
+app.Options{
+	Run: func(ctx context.Context, d app.RunDeps) error {
+		// d.Pool is the *pgxpool.Pool serve opened (migrations applied),
+		// d.Authorizer decides permissions, d.Log is the server's logger.
+		return consume(ctx, d.Pool, d.Log) // blocks until ctx is cancelled
+	},
+}
+```
+
+- `serve` starts it in its own goroutine after the database, Redis and
+  migrations are ready and before the listener. `Pool` and `Authorizer` are nil
+  when `<PREFIX>_DATABASE_DSN` is not set. It never runs under `openapi`.
+- `ctx` is the signal context, cancelled on SIGINT or SIGTERM (and when the
+  listener fails or `Run` fails). `Run` should block until then and return nil.
+- Shutdown cancels `ctx`, stops the listener, then **waits for `Run` to
+  return** before it closes the pool and Redis, so `Run` may use the pool until
+  it returns. A `Run` that ignores cancellation hangs the shutdown.
+- A non-nil error (other than `context.Canceled`) is **fatal**, before or after
+  cancellation, and so is a panic: it is logged, the listener is stopped and
+  `serve` returns the error, so the process exits non-zero and the platform
+  restarts it. A silently dead consumer behind a healthy `/health` is the worst
+  outcome. To survive a failure, retry inside `Run`.
+- A nil return before cancellation is logged as a warning and is not fatal: the
+  work is finished and the API keeps serving.
+- Handlers reach the pool through `Deps.Pool` in `Routes`; do not close it.
 
 ### Migrations
 
