@@ -243,8 +243,27 @@ steps:
 services:
   - name: core-pg-${CI_PIPELINE_NUMBER}
     image: postgres:18.6-alpine
+    # Sized here, not by the woodpecker namespace's 1.5 CPU default for
+    # unsized containers: at that default the two services alone held 3 CPU
+    # on the workflow's node and the steps that use them stayed Pending.
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: "1"
     environment:
       POSTGRES_PASSWORD: ci
       POSTGRES_DB: core_test
   - name: core-redis-${CI_PIPELINE_NUMBER}
     image: redis:8.10-alpine
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: "1"
