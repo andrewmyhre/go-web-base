@@ -180,7 +180,7 @@ func TestConcurrentFirstSignInsRunTheHookOnce(t *testing.T) {
 			defer wg.Done()
 			started <- struct{}{}
 			r := httptest.NewRequest(http.MethodGet, AuthCallbackPath, nil)
-			bound, status := rig.auth.firstSignIn(r, Identity{Sub: fakeSub})
+			bound, status, _ := rig.auth.firstSignIn(r, Identity{Sub: fakeSub})
 			results[i] = bound && status == 0
 		}()
 	}

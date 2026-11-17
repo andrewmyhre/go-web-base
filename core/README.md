@@ -17,6 +17,7 @@ text and the OpenAPI title through `app.Options`.
 | `config` | Viper configuration and flags. The env prefix is an argument. |
 | `db` | pgx pool, per-module goose migrations, sqlc queries, the Casbin adapter, and the role graph type (`db.RoleDef`) with its validation. Core ships no roles. |
 | `redis` | go-redis client, health check and the session store. |
+| `sitesettings` | The site settings store (sign-up mode), its invites, the `server.SignUpPolicy` that enforces invite-only sign-up, and the admin routes. See "Site settings". |
 | `logger`, `logging` | zap logger with a `service` field, and the typed log helpers behind the log scopes. |
 
 ## The `app.Options` contract
@@ -152,6 +153,27 @@ app.Options{
 - Bindings are read from memory per process, as before: a replica that did not
   bind the subject learns of the binding only at its next start or when the
   subject signs in there. Run one API replica, or accept that.
+
+### Site settings
+
+`sitesettings` keeps site-wide settings in Postgres (`site_setting`,
+`site_invite`; core migration `000002`) and the `sign_up_mode` setting
+(`open`, the default, or `invite_only`) is the first. `app` builds a
+`*sitesettings.Store` over the pool (`Deps.SiteSettings`, nil without a
+database), installs it as the `server.SignUpPolicy` of `Auth`
+(`WithSignUpPolicy`), and registers the admin routes (`GET`/`PUT`
+`/admin/settings`, `GET`/`POST` `/admin/invites`, `DELETE`
+`/admin/invites/{id}`, under `APIPrefix`) with permissions on two resources
+core registers, `SiteSettings` and `SiteInvites`, granted to `Admin`.
+
+The policy runs in the first sign-in, after the binding check and before
+`OnFirstSignIn`; an existing account never meets it. In invite-only mode it
+admits only a Google-verified email with a pending invite, and refuses with a
+`server.RefusalError` (a `server.ErrSignInRefused` that carries the page
+text). `Admitted` then consumes the invite once the role is bound. A failure
+to read the mode or the invites is a 503, never an admission. A hook may
+return `server.RefusalError` too, to say why it refused. See
+[docs/consuming.md](../docs/consuming.md#site-settings-open-sign-up-or-invite-only).
 
 ### Taking over authorization
 

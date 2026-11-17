@@ -208,6 +208,66 @@ same subject after a failure or on another replica. Set neither and nothing
 changes, so an existing project is unaffected by upgrading. See
 [core/README.md](../core/README.md#first-sign-in) for the details.
 
+## Site settings: open sign-up or invite-only
+
+**Available now** (the core release after `v0.5.0`). Core keeps a small typed
+store of site settings in its own Postgres tables (migration `000002`, applied
+with the rest of core's migrations), read through a cache (a change through
+this process shows at once, one made by another replica within 5 seconds), and
+an Admin changes them at `/settings` in the UI. The first setting is
+`sign_up_mode`:
+
+- `open` (the default, and what every app did before): any Google account may
+  make a first sign-in, subject to your `DefaultRole` and `OnFirstSignIn`.
+- `invite_only`: a first sign-in is refused with a 403 and the page text "this
+  site is invite-only: ask an administrator to invite your email address,
+  then sign in again", unless the Google-verified email has a pending invite.
+  An account that already has a role binding always signs in, and so does the
+  `<PREFIX>_ADMIN_SUB` bootstrap admin.
+
+The check runs inside core's first sign-in, **before** your `OnFirstSignIn`
+hook, so the hook only ever sees people who were let in. It is a
+`server.SignUpPolicy` (`Admit` before the hook, `Admitted` after the role is
+bound) that core installs with `Auth.WithSignUpPolicy`; nothing in
+`app.Options` changes. It therefore only matters where a role can be bound at
+first sign-in (`DefaultRole` or `OnFirstSignIn` set). An app that never admits
+new subjects needs no invites.
+
+An Admin invites an email address and can revoke a pending invite. The first
+sign-in by that address (the Google-verified one, compared in lower case)
+consumes the invite, so it admits one person once. Core sends no email: the
+admin shares the site's address. Sending mail is yours, if you want it.
+
+The admin API, registered by core on every router that has sign-in and an
+authorizer (or your `Guard`), under your `APIPrefix`:
+
+| Route | Permission |
+|---|---|
+| `GET /admin/settings`, `PUT /admin/settings/{key}` | `SiteSettings: Read`, `SiteSettings: Patch` |
+| `GET /admin/invites`, `POST /admin/invites`, `DELETE /admin/invites/{id}` | `SiteInvites: Read`, `SiteInvites: Create`, `SiteInvites: Delete` |
+
+Core registers the two resources and grants all five permissions to `Admin`,
+so no role graph change is needed and no other role can use them. If you
+want another role to, grant it the permissions yourself (`Installer.Grant`
+from a feature, or in `Roles`). An app that replaces core's check with a
+`Guard` must decide these permissions in its own guard, and an app that
+replaces the sign-in gate (`Options.SignIn`) calls `d.SiteSettings.Admit` and
+`d.SiteSettings.Admitted` from its own gate (`Deps.SiteSettings` is the
+`*sitesettings.Store`; nil without a database). A resource named `SiteSettings`
+or `SiteInvites` of your own clashes with core's and is refused at startup.
+
+In the UI, `<SiteSettings client={api} />` from `@andrewmyhre/web-base-ui`
+is the whole page (the template's `ui/src/routes/settings/+page.svelte` is one
+line around it); it shows "only an administrator" on a 403. An app whose API
+lives under a prefix passes `createApiClient({ baseUrl: '/api/v1' })`. The
+template's home page links to `/settings` for a global Admin, and its ingress
+and dev proxy send `/admin` to the API.
+
+Settings are defined in a list inside core today (key, label, allowed values,
+default), validated on every write, and a stored value that is no longer
+allowed reads as the default. Letting an app register its own settings is not
+built; the store is shaped for it (one definition list, values as JSON).
+
 ## Background work and the database pool
 
 **Available now** (core `v0.4.0`). An app that runs workers in the API process,

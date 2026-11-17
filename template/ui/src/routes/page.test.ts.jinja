@@ -43,6 +43,20 @@ describe('home page', () => {
 		expect(screen.queryByRole('link', { name: 'Sign in with Google' })).toBeNull();
 	});
 
+	it('signed in as a global Admin: links to the site settings', async () => {
+		api.getMe.mockResolvedValue(andrew);
+		render(Page);
+		const link = await screen.findByRole('link', { name: 'Site settings' });
+		expect(link.getAttribute('href')).toBe('/settings');
+	});
+
+	it('signed in without the Admin role: no link to the site settings', async () => {
+		api.getMe.mockResolvedValue({ ...andrew, roles: [{ role: 'Member', domain: 'global' }] });
+		render(Page);
+		await screen.findByRole('button', { name: 'Account menu for Andrew Myhre' });
+		expect(screen.queryByRole('link', { name: 'Site settings' })).toBeNull();
+	});
+
 	it('signing out from the avatar menu returns to the sign-in page', async () => {
 		api.getMe.mockResolvedValue(andrew);
 		api.signOut.mockResolvedValue(undefined);

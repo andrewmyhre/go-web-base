@@ -4,6 +4,78 @@
  */
 
 export interface paths {
+    "/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the sign-up invites */
+        get: operations["list-site-invites"];
+        put?: never;
+        /**
+         * Invite an email address
+         * @description Core sends no email: share the site's sign-in link with the person.
+         */
+        post: operations["create-site-invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/invites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a pending invite */
+        delete: operations["revoke-site-invite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the site settings */
+        get: operations["list-site-settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change a site setting */
+        put: operations["update-site-setting"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -76,6 +148,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        CreateInviteInputBody: {
+            /** @description The address to invite. Its first sign-in with this Google-verified address is let in. */
+            email: string;
+        };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
             location?: string;
@@ -131,7 +207,38 @@ export interface components {
              */
             greeting: string;
         };
-[[% endif %]]        MeOutputBody: {
+[[% endif %]]        InviteBody: {
+            /** Format: date-time */
+            consumed_at?: string;
+            /** @description The account id that used it. */
+            consumed_by?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Who created it (an account id). */
+            created_by?: string;
+            /** @description The invited address, lower case. */
+            email: string;
+            /**
+             * Format: int64
+             * @description The invite's id.
+             */
+            id: number;
+            /** Format: date-time */
+            revoked_at?: string;
+            /**
+             * @description pending can still be used; revoked was withdrawn; consumed admitted a first sign-in.
+             * @enum {string}
+             */
+            status: "pending" | "revoked" | "consumed";
+        };
+        ListInvitesOutputBody: {
+            /** @description Every invite, newest first. */
+            invites: components["schemas"]["InviteBody"][];
+        };
+        ListSettingsOutputBody: {
+            settings: components["schemas"]["SettingBody"][];
+        };
+        MeOutputBody: {
             /** @description Avatar URL. */
             avatar: string;
             /** @description Email, shown only and never matched on. Empty unless Google says it is verified. */
@@ -149,6 +256,31 @@ export interface components {
             /** @description Role name, for example Admin. */
             role: string;
         };
+        SettingBody: {
+            /** @description The value when nobody has set one. */
+            default: string;
+            /** @description What the setting does. */
+            description: string;
+            /** @description The setting's key. */
+            key: string;
+            /** @description A short name for display. */
+            label: string;
+            /** @description The values the setting allows. */
+            options: string[];
+            /**
+             * Format: date-time
+             * @description When an admin last changed it. Absent while it is at its default.
+             */
+            updated_at?: string;
+            /** @description Who last changed it (an account id). */
+            updated_by?: string;
+            /** @description The current value. */
+            value: string;
+        };
+        UpdateSettingInputBody: {
+            /** @description The new value; it must be one of the setting's options. */
+            value: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -158,6 +290,163 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "list-site-invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListInvitesOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "create-site-invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "revoke-site-invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invite's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-site-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSettingsOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "update-site-setting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The setting's key. */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     "auth-logout": {
         parameters: {
             query?: never;

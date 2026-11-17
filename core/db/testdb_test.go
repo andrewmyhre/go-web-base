@@ -120,7 +120,7 @@ func TestMigrateEmptySchema(t *testing.T) {
 	if err := MigrateWithConfig(ctx, cfg.ConnConfig); err != nil {
 		t.Fatalf("migrate empty schema: %v", err)
 	}
-	for _, table := range []string{"casbin_rule", "goose_db_version"} {
+	for _, table := range []string{"casbin_rule", "site_setting", "site_invite", "goose_db_version"} {
 		if !tableExists(t, pool, schema, table) {
 			t.Errorf("%s.%s missing after Migrate", schema, table)
 		}
@@ -139,8 +139,10 @@ func TestMigrateEmptySchema(t *testing.T) {
 	if _, err := provider.DownTo(ctx, 0); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
-	if tableExists(t, pool, schema, "casbin_rule") {
-		t.Errorf("%s.casbin_rule still exists after migrating down", schema)
+	for _, table := range []string{"casbin_rule", "site_setting", "site_invite"} {
+		if tableExists(t, pool, schema, table) {
+			t.Errorf("%s.%s still exists after migrating down", schema, table)
+		}
 	}
 }
 

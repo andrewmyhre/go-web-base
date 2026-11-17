@@ -92,3 +92,5 @@ Everything a Manager, Secrets Manager and Workflow Manager has, plus:
 - Providers: Patch
 - Providers: Delete
 
+
+Core also grants Admin the SiteSettings and SiteInvites permissions for the site settings routes. They are core's, not part of this graph, so they are not listed above.

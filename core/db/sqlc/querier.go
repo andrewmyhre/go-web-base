@@ -9,6 +9,10 @@ import (
 )
 
 type Querier interface {
+	// The single UPDATE is what makes consumption happen once: a second caller
+	// finds no pending row and changes nothing.
+	ConsumeSiteInvite(ctx context.Context, arg ConsumeSiteInviteParams) (int64, error)
+	CreateSiteInvite(ctx context.Context, arg CreateSiteInviteParams) (SiteInvite, error)
 	// SavePolicy replaces the whole policy inside one transaction.
 	DeleteAllCasbinRules(ctx context.Context) error
 	// Exact match: rules are NULL-padded, and IS NOT DISTINCT FROM treats NULL =
@@ -21,9 +25,16 @@ type Querier interface {
 	// ::text casts let Postgres type a parameter whose first use is `IS NULL`
 	// (without them pgx fails with SQLSTATE 42P08).
 	DeleteCasbinRulesFiltered(ctx context.Context, arg DeleteCasbinRulesFilteredParams) error
+	GetSiteSetting(ctx context.Context, key string) (SiteSetting, error)
+	HasPendingSiteInvite(ctx context.Context, email string) (bool, error)
 	InsertCasbinRule(ctx context.Context, arg InsertCasbinRuleParams) error
+	ListSiteInvites(ctx context.Context) ([]SiteInvite, error)
+	ListSiteSettings(ctx context.Context) ([]SiteSetting, error)
 	LoadCasbinRules(ctx context.Context) ([]LoadCasbinRulesRow, error)
 	LoadCasbinRulesByPtype(ctx context.Context, ptype string) ([]LoadCasbinRulesByPtypeRow, error)
+	// Only a pending invite can be revoked: a consumed one already did its job.
+	RevokeSiteInvite(ctx context.Context, id int64) (SiteInvite, error)
+	UpsertSiteSetting(ctx context.Context, arg UpsertSiteSettingParams) error
 }
 
 var _ Querier = (*Queries)(nil)

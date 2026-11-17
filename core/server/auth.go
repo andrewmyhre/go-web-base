@@ -72,6 +72,43 @@ func NewNames(app, cookiePrefix string) Names {
 // answers 503 so the user can try again.
 var ErrSignInRefused = errors.New("sign-in refused")
 
+// RefusalError is an ErrSignInRefused that also says why, in words safe to
+// show to the person who was refused. errors.Is(err, ErrSignInRefused) is
+// true for it, so a gate or a hook may return it anywhere it may return
+// ErrSignInRefused; the browser gets the same 403 with Message as the page
+// text instead of "you cannot sign in to <App>".
+type RefusalError struct {
+	Message string
+}
+
+func (e *RefusalError) Error() string { return "sign-in refused: " + e.Message }
+
+// Is makes a RefusalError match ErrSignInRefused.
+func (e *RefusalError) Is(target error) bool { return target == ErrSignInRefused }
+
+// refusalMessage is the page text a refusal carries, or "" for the default.
+func refusalMessage(err error) string {
+	var r *RefusalError
+	if errors.As(err, &r) {
+		return r.Message
+	}
+	return ""
+}
+
+// SignUpPolicy decides whether a subject that has no role binding yet may
+// make its first sign-in at all. It runs inside core's first sign-in, before
+// the app's FirstSignIn hook, and so it is the place for a site-wide rule
+// such as invite-only sign-up. Admit returns nil to let the subject go on to
+// the hook, a RefusalError or ErrSignInRefused to refuse it with 403, and
+// any other error to answer 503. Admitted runs once the subject's role is
+// bound, to record that the admission was used (for example, to consume an
+// invite); its failure is logged and does not undo the sign-in. Both may run
+// more than once for one subject.
+type SignUpPolicy interface {
+	Admit(ctx context.Context, id Identity) error
+	Admitted(ctx context.Context, id Identity) error
+}
+
 // FirstSignIn runs when a subject with no role binding signs in, before a
 // session is created. It returns the role to bind the subject to; an empty
 // role means the DefaultRole given to WithFirstSignIn. An error refuses the
@@ -99,6 +136,7 @@ type Auth struct {
 	signIn     SignIn
 	onSignedIn OnSignedIn
 
+	policy   SignUpPolicy
 	first    FirstSignIn
 	defRole  string
 	binder   RoleBinder
@@ -155,6 +193,16 @@ func (a *Auth) WithFirstSignIn(hook FirstSignIn, defaultRole string, binder Role
 		return a
 	}
 	a.first, a.defRole, a.binder = hook, defaultRole, binder
+	return a
+}
+
+// WithSignUpPolicy sets the rule every first sign-in must pass before the
+// FirstSignIn hook runs. It only matters where core's own gate is in use
+// and a role can be bound at first sign-in (WithFirstSignIn), and it never
+// applies to a subject that already holds a role binding. It returns a, so
+// it chains after NewAuth. A nil p removes the rule.
+func (a *Auth) WithSignUpPolicy(p SignUpPolicy) *Auth {
+	a.policy = p
 	return a
 }
 
@@ -271,9 +319,12 @@ func (a *Auth) Callback() http.Handler {
 			}
 		}
 
-		if status := a.gate(r, id); status != 0 {
+		if status, why := a.gate(r, id); status != 0 {
 			setCookie(w, a.names.SessionCookie, "", "/", -1)
 			msg := "you cannot sign in to " + a.names.App
+			if why != "" {
+				msg = why
+			}
 			if status == http.StatusServiceUnavailable {
 				msg = "sign-in is unavailable; try again"
 			}
@@ -298,10 +349,11 @@ func (a *Auth) Callback() http.Handler {
 // gate decides whether sub may sign in at all: it must hold a role binding
 // in some domain. It returns 0 to let the user in, 403 for a user with no
 // binding and 503 when the bindings cannot be read (fail closed), and logs
-// one rbac line either way. The caller's response carries no reason.
-func (a *Auth) gate(r *http.Request, id Identity) int {
+// one rbac line either way. The second result is the page text of a refusal
+// that gave one (a RefusalError), or "" for the default.
+func (a *Auth) gate(r *http.Request, id Identity) (int, string) {
 	if a.signIn != nil {
-		return a.appGate(r, id)
+		return a.appGate(r, id), ""
 	}
 	sub := id.Sub
 	decision := logging.RBACDecision{
@@ -315,29 +367,30 @@ func (a *Auth) gate(r *http.Request, id Identity) int {
 	if a.bindings == nil {
 		a.log.Error("sign-in has no role bindings to check; refusing everyone", zap.String("request_id", decision.RequestID))
 		rbac.Check(decision)
-		return http.StatusServiceUnavailable
+		return http.StatusServiceUnavailable, ""
 	}
 	status := 0
+	why := ""
 	bound, err := a.bindings.HasRoleBinding(sub)
 	if err != nil {
 		a.log.Warn("read role bindings", zap.String("request_id", decision.RequestID), zap.Error(err))
 		rbac.Check(decision)
-		return http.StatusServiceUnavailable
+		return http.StatusServiceUnavailable, ""
 	}
 	if !bound && a.binder != nil {
-		bound, status = a.firstSignIn(r, id)
+		bound, status, why = a.firstSignIn(r, id)
 		if status != 0 {
 			rbac.Check(decision)
-			return status
+			return status, why
 		}
 	}
 	if !bound {
 		rbac.Check(decision)
-		return http.StatusForbidden
+		return http.StatusForbidden, ""
 	}
 	decision.Decision = logging.Allow
 	rbac.Check(decision)
-	return 0
+	return 0, ""
 }
 
 // appGate is the gate when the app supplied SignIn. It logs the same one
@@ -372,44 +425,59 @@ func (a *Auth) appGate(r *http.Request, id Identity) int {
 
 // firstSignIn admits a subject with no binding through the app's hook and
 // default role. It returns whether the subject is now bound, or a status to
-// refuse with. It holds a per-subject lock and reads the bindings again
-// under it, so the hook runs once for concurrent first sign-ins.
-func (a *Auth) firstSignIn(r *http.Request, id Identity) (bool, int) {
+// refuse with and the page text of a refusal that gave one. It holds a
+// per-subject lock and reads the bindings again under it, so the hook runs
+// once for concurrent first sign-ins.
+func (a *Auth) firstSignIn(r *http.Request, id Identity) (bool, int, string) {
 	rid := RequestIDFromContext(r.Context())
 	unlock := a.lockSub(id.Sub)
 	defer unlock()
 	bound, err := a.bindings.HasRoleBinding(id.Sub)
 	if err != nil {
 		a.log.Warn("read role bindings", zap.String("request_id", rid), zap.Error(err))
-		return false, http.StatusServiceUnavailable
+		return false, http.StatusServiceUnavailable, ""
 	}
 	if bound {
-		return true, 0
+		return true, 0, ""
+	}
+	if a.policy != nil {
+		if err := a.policy.Admit(r.Context(), id); errors.Is(err, ErrSignInRefused) {
+			a.log.Info("first sign-in refused by the sign-up policy", zap.String("user_sub", id.Sub), zap.String("request_id", rid))
+			return false, http.StatusForbidden, refusalMessage(err)
+		} else if err != nil {
+			a.log.Warn("sign-up policy failed", zap.String("user_sub", id.Sub), zap.String("request_id", rid), zap.String("error", a.redact.Redact(err.Error())))
+			return false, http.StatusServiceUnavailable, ""
+		}
 	}
 	role := a.defRole
 	if a.first != nil {
 		hooked, err := a.first(r.Context(), id)
 		if errors.Is(err, ErrSignInRefused) {
 			a.log.Info("first sign-in refused by the app", zap.String("user_sub", id.Sub), zap.String("request_id", rid))
-			return false, http.StatusForbidden
+			return false, http.StatusForbidden, refusalMessage(err)
 		}
 		if err != nil {
 			a.log.Warn("first sign-in hook failed", zap.String("user_sub", id.Sub), zap.String("request_id", rid), zap.String("error", a.redact.Redact(err.Error())))
-			return false, http.StatusServiceUnavailable
+			return false, http.StatusServiceUnavailable, ""
 		}
 		if hooked != "" {
 			role = hooked
 		}
 	}
 	if role == "" {
-		return false, http.StatusForbidden
+		return false, http.StatusForbidden, ""
 	}
 	if err := a.binder.BindRole(id.Sub, role); err != nil {
 		a.log.Warn("bind first sign-in role", zap.String("user_sub", id.Sub), zap.String("role", role), zap.String("request_id", rid), zap.Error(err))
-		return false, http.StatusServiceUnavailable
+		return false, http.StatusServiceUnavailable, ""
 	}
 	a.log.Info("first sign-in: role bound", zap.String("user_sub", id.Sub), zap.String("role", role), zap.String("request_id", rid))
-	return true, 0
+	if a.policy != nil {
+		if err := a.policy.Admitted(r.Context(), id); err != nil {
+			a.log.Warn("record first sign-in admission", zap.String("user_sub", id.Sub), zap.String("request_id", rid), zap.String("error", a.redact.Redact(err.Error())))
+		}
+	}
+	return true, 0, ""
 }
 
 // LogoutInput is the request of POST /auth/logout. It has no fields: the

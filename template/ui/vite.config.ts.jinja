@@ -9,7 +9,7 @@ export default defineConfig({
 		// the same paths the dev ingress sends to the API, so the app stays
 		// same-origin and the session cookie works.
 		proxy: Object.fromEntries(
-			['/auth', '/me', '/health', '/openapi.json'].map((p) => [p, 'http://localhost:8080'])
+			['/auth', '/me', '/admin', '/health', '/openapi.json'].map((p) => [p, 'http://localhost:8080'])
 		)
 	},
 	test: {

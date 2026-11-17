@@ -22,7 +22,7 @@ admin applies it by hand.
 | `redis.yaml` | Redis 8 with no persistence: a restart logs everyone out of dev. ClusterIP |
 | `api.yaml` | The API Deployment and Service (port 80 to 8080). Non-root, read-only root filesystem, probes on `/health` |
 | `ui.yaml` | The UI Deployment and Service (port 80 to 8080): nginx-unprivileged serving the static build, non-root (uid 101), read-only root filesystem with an in-memory `/tmp`, probes on `/` |
-| `ingress.yaml` | Host `[[ dev_host ]]`: `/auth`, `/me` (Prefix), `/health` and `/openapi.json` (Exact) to the API, everything else to the UI. No `tls:` block, because TLS ends at Cloudflare |
+| `ingress.yaml` | Host `[[ dev_host ]]`: `/auth`, `/me`, `/admin` (Prefix), `/health` and `/openapi.json` (Exact) to the API, everything else to the UI. No `tls:` block, because TLS ends at Cloudflare |
 | `dev-services-sealed.yaml` | Postgres and Redis passwords, sealed at setup (below) |
 | `google-oauth-sealed.yaml` | Google OAuth client id and secret (`[[ project_slug ]]-google-oauth`) |
 

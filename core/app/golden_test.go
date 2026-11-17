@@ -32,6 +32,11 @@ import (
 // every status and body of the built-in routes, the rbac log lines, and the
 // OpenAPI document. A change that alters default behaviour fails here.
 //
+// One deliberate change since: the site settings routes (/admin/settings and
+// /admin/invites, guarded by SiteSettings and SiteInvites permissions that
+// only Admin holds) are added to the route list and the OpenAPI document.
+// The golden files were regenerated for them and nothing else in them moved.
+//
 // It uses only API that exists at v0.4.0, so it can be copied into that tag
 // unchanged to regenerate the files.
 
