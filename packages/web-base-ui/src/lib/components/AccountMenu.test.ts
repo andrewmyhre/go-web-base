@@ -100,3 +100,18 @@ describe('AccountMenu', () => {
 		expect(document.activeElement).toBe(avatar);
 	});
 });
+
+describe('AccountMenu showUserId', () => {
+	it('shows the user id in the Account dialog only when asked', async () => {
+		const first = render(AccountMenu, { props: { user: andrew, onSignOut: vi.fn() } });
+		await openAccount(screen.getByRole('button', { name: 'Account menu for Andrew Myhre' }));
+		expect(screen.queryByText(andrew.id)).toBeNull();
+		first.unmount();
+		render(AccountMenu, { props: { user: andrew, onSignOut: vi.fn(), showUserId: true } });
+		await openAccount(screen.getByRole('button', { name: 'Account menu for Andrew Myhre' }));
+		const code = screen.getByText(andrew.id);
+		expect(code.tagName).toBe('CODE');
+		expect(code.parentElement?.className).toBe('email');
+		expect(code.parentElement?.textContent).toBe(`User id: ${andrew.id}`);
+	});
+});

@@ -10,11 +10,12 @@
 		revokeSiteInvite,
 		updateSiteSetting,
 		type SiteInvite,
+		type BasePaths,
 		type SiteSetting
 	} from '../api/index';
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	let { client = createApiClient() }: { client?: import('openapi-fetch').Client<any> } = $props();
+	let { client = createApiClient<BasePaths>() }: { client?: import('openapi-fetch').Client<any> } = $props();
 
 	type State =
 		| { kind: 'loading' }

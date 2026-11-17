@@ -9,7 +9,7 @@ version bump (through `copier update`, see below).
 | Export | What it is |
 |---|---|
 | `AccountMenu`, `AccountModal`, `Avatar`, `SideMenu`, `SiteSettings`, `UserBadge` | Components, from `@andrewmyhre/web-base-ui` |
-| `createApiClient<paths>()`, `getMe`, `signOut`, `roleLabel`, `ApiError`, `SIGN_IN_PATH`, `LOGOUT_PATH`, types `Me`, `MeRole`, `BasePaths`, `ApiClient` | The API client helpers, from `@andrewmyhre/web-base-ui` or `@andrewmyhre/web-base-ui/api` |
+| `createApiClient<paths>({ apiPrefix? })`, `getMe`, `signOut`, `mePath`, `logoutPath`, `roleLabel`, `ApiError`, `SIGN_IN_PATH`, `LOGOUT_PATH`, types `Me`, `MeRole`, `BasePaths`, `ApiClient` | The API client helpers, from `@andrewmyhre/web-base-ui` or `@andrewmyhre/web-base-ui/api` |
 | `listSiteSettings`, `updateSiteSetting`, `listSiteInvites`, `createSiteInvite`, `revokeSiteInvite`, `AdminApiError`, types `SiteSetting`, `SiteInvite`, `SiteSettingsPaths` | The site settings API helpers (core's `/admin/settings` and `/admin/invites`), from the root or `/api`. `<SiteSettings client={api} />` is the page built on them |
 | `strategyFor`, `isApiPath`, `API_PREFIXES` | The service worker policy, from `@andrewmyhre/web-base-ui/sw-policy` |
 
@@ -33,6 +33,47 @@ export const api = createApiClient<paths>();
 answering a `Me` and `POST /auth/logout`, so a project whose API drifts from
 what the helpers call fails type checking. Then `getMe(api)` and
 `signOut(api)`.
+
+### A prefixed API
+
+If the generated `paths` are keyed `/api/v1/me` and `/api/v1/auth/logout`,
+pass the prefix. It is checked against the keys of `paths` (a prefix `paths`
+does not offer is a type error, and so is omitting it), and `getMe(api)` and
+`signOut(api)` use it. The default is `''`, with unchanged behaviour. The
+prefix is already in the generated keys, so request URLs do not change.
+
+```ts
+export const api = createApiClient<paths>({ apiPrefix: '/api/v1' });
+// getMe(api) -> GET /api/v1/me; signOut(api) -> POST /api/v1/auth/logout
+// getMe(client, { apiPrefix }) and signOut(client, { apiPrefix }) override it;
+// mePath(prefix) and logoutPath(prefix) give the paths.
+```
+
+### SideMenu items
+
+`<SideMenu />` is a single Home link. Pass `items` for your own navigation:
+`{ label, href, group?, visible?, current? }`, rendered in order. Ungrouped
+items form the first list; each `group` follows as a heading and list, in
+order of first appearance. `visible: false` omits an item (and a group whose
+items are all hidden). The current item is the one whose `href` equals the
+path, or the one with `current: true`. A data prop was chosen over a children
+snippet so the menu keeps owning its markup, classes and `aria-current`
+handling, and so gated entries are plain booleans computed from `/me`.
+
+```svelte
+<SideMenu items={[
+  { label: 'Home', href: '/' },
+  { label: 'Providers', href: '/providers', visible: me.canReadProviders },
+  { label: 'Activity', href: '/activity', group: 'Admin', visible: me.canReadActivity },
+  { label: 'Admin', href: '/admin', group: 'Admin', visible: me.isAdmin }
+]} />
+```
+
+### User id
+
+`<AccountMenu showUserId />` (and `<AccountModal showUserId />`) adds
+`<p class="email">User id: <code>{user.id}</code></p>` under the name and
+email. It is off by default, so the default markup is unchanged.
 
 ```ts
 // src/service-worker.ts
