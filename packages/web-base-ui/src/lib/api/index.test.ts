@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createApiClient, getMe, signOut, roleLabel, ApiError, SIGN_IN_PATH, LOGOUT_PATH, type Me } from './index';
+import { createApiClient, getMe, signOut, roleLabel, ApiError, SIGN_IN_PATH, LOGOUT_PATH, type BasePaths, logoutPath, mePath, type Me } from './index';
 
 const andrew: Me = {
 	id: '104242424242424242424',
@@ -74,5 +74,65 @@ describe('roleLabel', () => {
 	it('names the role and the domain it applies in', () => {
 		expect(roleLabel({ role: 'Admin', domain: 'global' })).toBe('Admin (global)');
 		expect(roleLabel({ role: 'Contributor', domain: 'proj-a' })).toBe('Contributor (proj-a)');
+	});
+});
+
+describe('apiPrefix', () => {
+	// A paths map keyed like huddle-go's generated one.
+	interface prefixed {
+		'/api/v1/me': {
+			get: { responses: { 200: { content: { 'application/json': Me } } } };
+		};
+		'/api/v1/auth/logout': { post: { responses: { 204: unknown } } };
+		'/api/v1/other': { get: { responses: { 200: unknown } } };
+	}
+
+	function prefixedClient(res: Response) {
+		const seen: Request[] = [];
+		const fetch = (async (input: Request) => (seen.push(input), res)) as unknown as typeof globalThis.fetch;
+		const client = createApiClient<prefixed>({ baseUrl: 'https://app.test', fetch, apiPrefix: '/api/v1' });
+		return { client, seen };
+	}
+
+	it('getMe and signOut call the prefixed paths using the prefix the client was made with', async () => {
+		const me = prefixedClient(json(200, andrew));
+		expect(await getMe(me.client)).toEqual(andrew);
+		expect(new URL(me.seen[0].url).pathname).toBe('/api/v1/me');
+		const out = prefixedClient(new Response(null, { status: 204 }));
+		await signOut(out.client);
+		expect(new URL(out.seen[0].url).pathname).toBe('/api/v1/auth/logout');
+		expect(logoutPath('/api/v1')).toBe('/api/v1/auth/logout');
+		expect(mePath('/api/v1')).toBe('/api/v1/me');
+	});
+
+	it('an explicit apiPrefix on getMe and signOut wins, and errors name the prefixed operation', async () => {
+		const seen: Request[] = [];
+		const fetch = (async (input: Request) => (seen.push(input), json(503, { status: 503 }))) as unknown as typeof globalThis.fetch;
+		const client = createApiClient({ baseUrl: 'https://app.test', fetch });
+		await expect(getMe(client, { apiPrefix: '/api/v1' })).rejects.toEqual(new ApiError(503, 'GET /api/v1/me'));
+		await expect(signOut(client, { apiPrefix: '/api/v1' })).rejects.toEqual(new ApiError(503, 'POST /api/v1/auth/logout'));
+		expect(seen.map((r) => new URL(r.url).pathname)).toEqual(['/api/v1/me', '/api/v1/auth/logout']);
+	});
+
+	it('type checks only for a prefix the paths offer', () => {
+		// @ts-expect-error '/api/v2' is not a prefix of /me and /auth/logout in these paths
+		createApiClient<prefixed>({ apiPrefix: '/api/v2' });
+		// @ts-expect-error these paths have no unprefixed /me, so the prefix is required
+		createApiClient<prefixed>();
+		// @ts-expect-error the empty prefix is not what these paths use
+		createApiClient<prefixed>({ apiPrefix: '' });
+		interface noMe { '/other': { get: { responses: { 200: unknown } } } }
+		// @ts-expect-error no /me and /auth/logout at all
+		createApiClient<noMe>({ apiPrefix: '/api/v1' });
+	});
+
+	it('keeps the signatures that compile on main: any, and a generic wrapper', () => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const anyClient = createApiClient<any>();
+		function wrap<P extends BasePaths>() {
+			return createApiClient<P>();
+		}
+		expect(anyClient).toBeTruthy();
+		expect(typeof wrap).toBe('function');
 	});
 });

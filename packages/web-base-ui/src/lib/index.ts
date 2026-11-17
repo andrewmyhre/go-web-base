@@ -5,3 +5,4 @@ export { default as SiteSettings } from './components/SiteSettings.svelte';
 export { default as SideMenu } from './components/SideMenu.svelte';
 export { default as UserBadge } from './components/UserBadge.svelte';
 export * from './api/index';
+export type { SideMenuItem } from './components/SideMenu.svelte';

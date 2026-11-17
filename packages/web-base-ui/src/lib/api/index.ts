@@ -19,23 +19,39 @@ export interface Me {
 
 /**
  * The part of a project's generated `paths` type that these helpers use: a
- * `GET /me` answering a `Me` as JSON and a `POST /auth/logout`. The generated
- * type of any go-web-base project satisfies it, so `createApiClient<paths>()`
- * checks that the project's OpenAPI document still offers what the helpers
- * call.
+ * `GET <prefix>/me` answering a `Me` as JSON and a `POST <prefix>/auth/logout`.
+ * The prefix is '' by default. A project whose API lives under `/api/v1` has
+ * `paths` keyed `/api/v1/me`, which satisfies `BasePaths<'/api/v1'>`. The
+ * generated type of any go-web-base project satisfies it, so
+ * `createApiClient<paths>()` checks that the project's OpenAPI document still
+ * offers what the helpers call.
  */
-export interface BasePaths {
-	'/me': {
+export type BasePaths<Prefix extends string = ''> = {
+	[K in `${Prefix}/me`]: {
 		get: {
 			responses: { 200: { content: { 'application/json': Me } } };
 		};
 	};
-	'/auth/logout': {
+} & {
+	[K in `${Prefix}/auth/logout`]: {
 		post: {
 			responses: { 204: unknown };
 		};
 	};
-}
+};
+
+/**
+ * The prefixes P offers both `<prefix>/me` and `<prefix>/auth/logout` under:
+ * '' for `/me`, `/api/v1` for `/api/v1/me`. `never` when P has neither pair.
+ */
+export type ApiPrefixOf<P> = {
+	[K in keyof P]: K extends `${infer X}/me`
+		? `${X}/auth/logout` extends keyof P
+			? X
+			: never
+		: never;
+}[keyof P] &
+	string;
 
 /** A role as the account view shows it, for example "Admin (global)". */
 export function roleLabel(r: MeRole): string {
@@ -53,8 +69,36 @@ export const SIGN_IN_PATH = '/auth/google';
 /** Ends the session. POST, answered with 204 and a cleared cookie. */
 export const LOGOUT_PATH = '/auth/logout';
 
+/** The path of GET /me under an API prefix ('' by default). */
+export const mePath = (apiPrefix = ''): string => `${apiPrefix}/me`;
+
+/** The path of POST /auth/logout under an API prefix ('' by default). */
+export const logoutPath = (apiPrefix = ''): string => `${apiPrefix}${LOGOUT_PATH}`;
+
 /** The typed client for a project's generated `paths`. */
 export type ApiClient<P extends object = BasePaths> = Client<P>;
+
+/** Options for createApiClient. */
+export interface ApiClientOptions {
+	baseUrl?: string;
+	fetch?: typeof globalThis.fetch;
+}
+
+/** Options for a client whose `paths` keep /me and /auth/logout under a prefix. */
+export interface PrefixedApiClientOptions<Prefix extends string> extends ApiClientOptions {
+	/** Where `paths` keeps /me and /auth/logout, for example '/api/v1'. */
+	apiPrefix: Prefix;
+}
+
+/**
+ * A non-empty prefix `paths` offers both `<prefix>/me` and
+ * `<prefix>/auth/logout` under; `never` when it offers none.
+ */
+export type PrefixedApiPrefixOf<P> = Exclude<ApiPrefixOf<P>, ''>;
+
+// The prefix each client was made with, so getMe(api) and signOut(api) call
+// the right paths without repeating it.
+const prefixes = new WeakMap<object, string>();
 
 /**
  * The typed client, generic over the project's generated `paths` type (from
@@ -64,15 +108,27 @@ export type ApiClient<P extends object = BasePaths> = Client<P>;
  *
  *     import type { paths } from './openapi';
  *     export const api = createApiClient<paths>();
+ *
+ * A project whose paths are keyed `/api/v1/me` passes the prefix, which must
+ * be one `paths` offers `/me` and `/auth/logout` under:
+ *
+ *     export const api = createApiClient<paths>({ apiPrefix: '/api/v1' });
+ *
+ * The prefix is already in the generated keys, so it does not change the
+ * request URLs; it tells `getMe` and `signOut` which keys to call.
  */
-export function createApiClient<P extends BasePaths = BasePaths>(
-	opts: { baseUrl?: string; fetch?: typeof globalThis.fetch } = {}
-): Client<P> {
-	return createClient<P>({
+export function createApiClient<P extends BasePaths = BasePaths>(opts?: ApiClientOptions): Client<P>;
+export function createApiClient<P extends object>(
+	opts: PrefixedApiClientOptions<PrefixedApiPrefixOf<P>>
+): Client<P>;
+export function createApiClient(opts: Partial<PrefixedApiClientOptions<string>> = {}): Client<object> {
+	const client = createClient<object>({
 		baseUrl: opts.baseUrl ?? '',
 		credentials: 'same-origin',
 		...(opts.fetch ? { fetch: opts.fetch } : {})
 	});
+	if (opts.apiPrefix) prefixes.set(client, opts.apiPrefix);
+	return client;
 }
 
 /** The API answered something other than a user or "not signed in". */
@@ -90,12 +146,20 @@ export class ApiError extends Error {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = Client<any>;
 const base = (client: AnyClient) => client as unknown as Client<BasePaths>;
+const prefixOf = (client: AnyClient, apiPrefix?: string) => apiPrefix ?? prefixes.get(client) ?? '';
 
-/** The signed-in user, or null when the browser has no session (401). */
-export async function getMe(client: AnyClient = createApiClient()): Promise<Me | null> {
-	const { data, response } = await base(client).GET('/me');
+/**
+ * The signed-in user, or null when the browser has no session (401). The
+ * prefix defaults to the one the client was made with.
+ */
+export async function getMe(
+	client: AnyClient = createApiClient<BasePaths>(),
+	opts: { apiPrefix?: string } = {}
+): Promise<Me | null> {
+	const path = mePath(prefixOf(client, opts.apiPrefix));
+	const { data, response } = await base(client).GET(path as '/me');
 	if (response.status === 401) return null;
-	if (!response.ok || !data) throw new ApiError(response.status);
+	if (!response.ok || !data) throw new ApiError(response.status, `GET ${path}`);
 	return data;
 }
 
@@ -103,9 +167,13 @@ export async function getMe(client: AnyClient = createApiClient()): Promise<Me |
  * Sign the browser out: POST /auth/logout, which deletes the session and
  * clears the cookie. The cookie is HttpOnly, so only the API can clear it.
  */
-export async function signOut(client: AnyClient = createApiClient()): Promise<void> {
-	const { response } = await base(client).POST(LOGOUT_PATH);
-	if (!response.ok) throw new ApiError(response.status, `POST ${LOGOUT_PATH}`);
+export async function signOut(
+	client: AnyClient = createApiClient<BasePaths>(),
+	opts: { apiPrefix?: string } = {}
+): Promise<void> {
+	const path = logoutPath(prefixOf(client, opts.apiPrefix));
+	const { response } = await base(client).POST(path as '/auth/logout');
+	if (!response.ok) throw new ApiError(response.status, `POST ${path}`);
 }
 
 /** One site setting, as GET /admin/settings returns it. */
@@ -181,7 +249,7 @@ function failed(response: Response, operation: string, error?: unknown): never {
 }
 
 /** Every site setting with its value. 401 or 403 throws an AdminApiError with that status. */
-export async function listSiteSettings(client: AnyClient = createApiClient()): Promise<SiteSetting[]> {
+export async function listSiteSettings(client: AnyClient = createApiClient<BasePaths>()): Promise<SiteSetting[]> {
 	const { data, error, response } = await admin(client).GET('/admin/settings');
 	if (!response.ok || !data) return failed(response, 'GET /admin/settings', error);
 	return data.settings;
@@ -191,7 +259,7 @@ export async function listSiteSettings(client: AnyClient = createApiClient()): P
 export async function updateSiteSetting(
 	key: string,
 	value: string,
-	client: AnyClient = createApiClient()
+	client: AnyClient = createApiClient<BasePaths>()
 ): Promise<SiteSetting> {
 	const { data, error, response } = await admin(client).PUT('/admin/settings/{key}', {
 		params: { path: { key } },
@@ -202,21 +270,21 @@ export async function updateSiteSetting(
 }
 
 /** Every invite, newest first, whatever its state. */
-export async function listSiteInvites(client: AnyClient = createApiClient()): Promise<SiteInvite[]> {
+export async function listSiteInvites(client: AnyClient = createApiClient<BasePaths>()): Promise<SiteInvite[]> {
 	const { data, error, response } = await admin(client).GET('/admin/invites');
 	if (!response.ok || !data) return failed(response, 'GET /admin/invites', error);
 	return data.invites;
 }
 
 /** Invite an email address. 409 when it already has a pending invite, 422 for a bad address. */
-export async function createSiteInvite(email: string, client: AnyClient = createApiClient()): Promise<SiteInvite> {
+export async function createSiteInvite(email: string, client: AnyClient = createApiClient<BasePaths>()): Promise<SiteInvite> {
 	const { data, error, response } = await admin(client).POST('/admin/invites', { body: { email } });
 	if (!response.ok || !data) return failed(response, 'POST /admin/invites', error);
 	return data;
 }
 
 /** Withdraw a pending invite. */
-export async function revokeSiteInvite(id: number, client: AnyClient = createApiClient()): Promise<void> {
+export async function revokeSiteInvite(id: number, client: AnyClient = createApiClient<BasePaths>()): Promise<void> {
 	const { error, response } = await admin(client).DELETE('/admin/invites/{id}', { params: { path: { id } } });
 	if (!response.ok) return failed(response, 'DELETE /admin/invites/{id}', error);
 }

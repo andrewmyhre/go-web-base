@@ -2,7 +2,18 @@
 	import Avatar from './Avatar.svelte';
 	import { roleLabel, type Me } from '../api/index';
 
-	let { user, open, onclose }: { user: Me; open: boolean; onclose: () => void } = $props();
+	let {
+		user,
+		open,
+		onclose,
+		showUserId = false
+	}: {
+		user: Me;
+		open: boolean;
+		onclose: () => void;
+		/** Show the user id (the Google account id an admin binds roles to). Default false. */
+		showUserId?: boolean;
+	} = $props();
 
 	let dialog: HTMLDialogElement | undefined = $state();
 	let closeButton: HTMLButtonElement | undefined = $state();
@@ -48,7 +59,7 @@
 		<Avatar name={user.name} avatar={user.avatar} size={64} />
 		<div>
 			<p class="name">{user.name}</p>
-			{#if user.email}<p class="email">{user.email}</p>{/if}
+			{#if showUserId}{#if user.email}<p class="email">{user.email}</p>{/if}<p class="email">User id: <code>{user.id}</code></p>{:else if user.email}<p class="email">{user.email}</p>{/if}
 		</div>
 	</div>
 	<h3 id="account-modal-roles">Roles</h3>

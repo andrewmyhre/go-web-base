@@ -3,7 +3,11 @@
 	import AccountModal from './AccountModal.svelte';
 	import type { Me } from '../api/index';
 
-	let { user, onSignOut }: { user: Me; onSignOut: () => void } = $props();
+	let {
+		user,
+		onSignOut,
+		showUserId = false
+	}: { user: Me; onSignOut: () => void; showUserId?: boolean } = $props();
 
 	let menuOpen = $state(false);
 	let accountOpen = $state(false);
@@ -70,4 +74,4 @@
 	{/if}
 </div>
 
-<AccountModal {user} open={accountOpen} onclose={closeAccount} />
+<AccountModal {user} {showUserId} open={accountOpen} onclose={closeAccount} />
