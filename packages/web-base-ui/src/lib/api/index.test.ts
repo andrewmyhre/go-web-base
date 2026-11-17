@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createApiClient, getMe, signOut, roleLabel, ApiError, SIGN_IN_PATH, LOGOUT_PATH, logoutPath, mePath, type Me } from './index';
+import { createApiClient, getMe, signOut, roleLabel, ApiError, SIGN_IN_PATH, LOGOUT_PATH, type BasePaths, logoutPath, mePath, type Me } from './index';
 
 const andrew: Me = {
 	id: '104242424242424242424',
@@ -117,10 +117,22 @@ describe('apiPrefix', () => {
 	it('type checks only for a prefix the paths offer', () => {
 		// @ts-expect-error '/api/v2' is not a prefix of /me and /auth/logout in these paths
 		createApiClient<prefixed>({ apiPrefix: '/api/v2' });
-		// @ts-expect-error these paths have no unprefixed /me
+		// @ts-expect-error these paths have no unprefixed /me, so the prefix is required
 		createApiClient<prefixed>();
+		// @ts-expect-error the empty prefix is not what these paths use
+		createApiClient<prefixed>({ apiPrefix: '' });
 		interface noMe { '/other': { get: { responses: { 200: unknown } } } }
 		// @ts-expect-error no /me and /auth/logout at all
-		createApiClient<noMe>({});
+		createApiClient<noMe>({ apiPrefix: '/api/v1' });
+	});
+
+	it('keeps the signatures that compile on main: any, and a generic wrapper', () => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const anyClient = createApiClient<any>();
+		function wrap<P extends BasePaths>() {
+			return createApiClient<P>();
+		}
+		expect(anyClient).toBeTruthy();
+		expect(typeof wrap).toBe('function');
 	});
 });

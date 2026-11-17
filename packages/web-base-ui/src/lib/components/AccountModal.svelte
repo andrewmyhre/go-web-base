@@ -59,8 +59,7 @@
 		<Avatar name={user.name} avatar={user.avatar} size={64} />
 		<div>
 			<p class="name">{user.name}</p>
-			{#if user.email}<p class="email">{user.email}</p>{/if}
-			{#if showUserId}<p class="email">User id: <code>{user.id}</code></p>{/if}
+			{#if showUserId}{#if user.email}<p class="email">{user.email}</p>{/if}<p class="email">User id: <code>{user.id}</code></p>{:else if user.email}<p class="email">{user.email}</p>{/if}
 		</div>
 	</div>
 	<h3 id="account-modal-roles">Roles</h3>

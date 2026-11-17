@@ -15,8 +15,9 @@ describe('SideMenu', () => {
 
 	it('without props renders exactly the single Home list', () => {
 		const { container } = render(SideMenu);
-		expect(container.querySelector('nav')?.innerHTML.replace(/<!--.*?-->/g, '').trim()).toBe(
-			'<ul><li><a href="/" aria-current="page">Home</a></li></ul>'
+		// Same bytes as main, apart from Svelte's comment anchors: no extra whitespace nodes.
+		expect(container.innerHTML.replace(/<!---->/g, '')).toBe(
+			'<nav class="menu" aria-label="Main"><ul><li><a href="/" aria-current="page">Home</a></li></ul></nav>'
 		);
 	});
 
@@ -63,5 +64,46 @@ describe('SideMenu', () => {
 		expect(screen.getByRole('link', { name: 'Home' }).getAttribute('aria-current')).toBe('page');
 		expect(screen.getByRole('link', { name: 'Orgs' }).getAttribute('aria-current')).toBe('page');
 		expect(screen.getByRole('link', { name: 'Lab' }).getAttribute('aria-current')).toBeNull();
+	});
+
+	it('groups across several groups in order of first appearance, collecting non-adjacent items', () => {
+		render(SideMenu, {
+			props: {
+				items: [
+					{ label: 'A1', href: '/a1', group: 'Alpha' },
+					{ label: 'Top', href: '/top' },
+					{ label: 'B1', href: '/b1', group: 'Beta' },
+					{ label: 'A2', href: '/a2', group: 'Alpha' },
+					{ label: 'B2', href: '/b2', group: 'Beta' },
+					{ label: 'Top2', href: '/top2' }
+				]
+			}
+		});
+		const lists = screen.getAllByRole('list');
+		expect(lists).toHaveLength(3);
+		const names = (el: HTMLElement) => Array.from(el.querySelectorAll('a')).map((a) => a.textContent);
+		expect(names(lists[0])).toEqual(['Top', 'Top2']);
+		expect(names(screen.getByRole('list', { name: 'Alpha' }))).toEqual(['A1', 'A2']);
+		expect(names(screen.getByRole('list', { name: 'Beta' }))).toEqual(['B1', 'B2']);
+		expect(lists[1].previousElementSibling?.textContent).toBe('Alpha');
+		expect(lists[2].previousElementSibling?.textContent).toBe('Beta');
+	});
+
+	it('does not crash on a duplicate href', () => {
+		render(SideMenu, { props: { items: [{ label: 'One', href: '/x' }, { label: 'Two', href: '/x' }, { label: 'Three', href: '/x', group: 'G' }, { label: 'Four', href: '/x', group: 'G' }] } });
+		expect(screen.getAllByRole('link')).toHaveLength(4);
+	});
+
+	it('gives two menus distinct heading ids', () => {
+		const items = [{ label: 'A', href: '/a', group: 'Admin' }];
+		const one = render(SideMenu, { props: { items } });
+		const two = render(SideMenu, { props: { items } });
+		const ids = [...one.container.querySelectorAll('.group'), ...two.container.querySelectorAll('.group')].map((e) => e.id);
+		expect(ids).toHaveLength(2);
+		expect(new Set(ids).size).toBe(2);
+		for (const c of [one.container, two.container]) {
+			const h = c.querySelector('.group')!;
+			expect(c.querySelector('ul')!.getAttribute('aria-labelledby')).toBe(h.id);
+		}
 	});
 });

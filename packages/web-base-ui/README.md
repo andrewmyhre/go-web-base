@@ -39,8 +39,20 @@ what the helpers call fails type checking. Then `getMe(api)` and
 If the generated `paths` are keyed `/api/v1/me` and `/api/v1/auth/logout`,
 pass the prefix. It is checked against the keys of `paths` (a prefix `paths`
 does not offer is a type error, and so is omitting it), and `getMe(api)` and
-`signOut(api)` use it. The default is `''`, with unchanged behaviour. The
-prefix is already in the generated keys, so request URLs do not change.
+`signOut(api)` use it. The default is `''`, with unchanged behaviour.
+
+`apiPrefix` only selects which keys `getMe` and `signOut` use; it does not
+rewrite URLs, because the prefix is already in the generated keys. A client
+made by another factory (not `createApiClient`) has no remembered prefix, so
+pass it explicitly: `getMe(client, { apiPrefix: '/api/v1' })`.
+
+The service worker policy must know the prefix too. Pass it (for example
+`/api/v1`, or the `/api` that covers it) as an extra prefix to `isApiPath` and
+`strategyFor`, or `/api/v1/me` is treated as an app asset and can be cached:
+
+```ts
+strategyFor(request, origin, precached, ['/api']);
+```
 
 ```ts
 export const api = createApiClient<paths>({ apiPrefix: '/api/v1' });

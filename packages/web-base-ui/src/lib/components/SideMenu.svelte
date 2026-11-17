@@ -24,13 +24,16 @@
 	 * the menu is a single Home link.
 	 */
 	let { items }: { items?: SideMenuItem[] } = $props();
+	// Unique per menu instance, so two menus never share heading ids.
+	const uid = $props.id();
 
 	const shown = $derived(
-		(items ?? [{ label: 'Home', href: '/' }]).filter((i) => i.visible !== false)
+		(items ?? []).filter((i) => i.visible !== false)
 	);
-	const top = $derived(shown.filter((i) => !i.group));
-	const groups = $derived.by(() => {
+	// The ungrouped list first (when it has items), then each group in order of first appearance.
+	const sections = $derived.by(() => {
 		const out: { name: string; items: SideMenuItem[] }[] = [];
+		if (shown.some((i) => !i.group)) out.push({ name: '', items: shown.filter((i) => !i.group) });
 		for (const i of shown) {
 			if (!i.group) continue;
 			let g = out.find((x) => x.name === i.group);
@@ -43,19 +46,18 @@
 </script>
 
 <nav class="menu" aria-label="Main">
-	{#if top.length}
+	{#if items}
+		{#each sections as g, n (n)}
+			{#if g.name}<div class="group" id="{uid}-group-{n}">{g.name}</div>{/if}
+			<ul aria-labelledby={g.name ? `${uid}-group-${n}` : undefined}>
+				{#each g.items as i, m (m + i.href)}
+					<li><a href={i.href} aria-current={current(i) ? 'page' : undefined}>{i.label}</a></li>
+				{/each}
+			</ul>
+		{/each}
+	{:else}
 		<ul>
-			{#each top as i (i.href)}
-				<li><a href={i.href} aria-current={current(i) ? 'page' : undefined}>{i.label}</a></li>
-			{/each}
+			<li><a href="/" aria-current={page.url.pathname === '/' ? 'page' : undefined}>Home</a></li>
 		</ul>
 	{/if}
-	{#each groups as g, n (g.name)}
-		<div class="group" id="menu-group-{n}">{g.name}</div>
-		<ul aria-labelledby="menu-group-{n}">
-			{#each g.items as i (i.href)}
-				<li><a href={i.href} aria-current={current(i) ? 'page' : undefined}>{i.label}</a></li>
-			{/each}
-		</ul>
-	{/each}
 </nav>

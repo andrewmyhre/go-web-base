@@ -79,23 +79,22 @@ export const logoutPath = (apiPrefix = ''): string => `${apiPrefix}${LOGOUT_PATH
 export type ApiClient<P extends object = BasePaths> = Client<P>;
 
 /** Options for createApiClient. */
-export interface ApiClientOptions<Prefix extends string> {
+export interface ApiClientOptions {
 	baseUrl?: string;
 	fetch?: typeof globalThis.fetch;
-	/** Where `paths` keeps /me and /auth/logout: '' (default) or for example '/api/v1'. */
-	apiPrefix?: Prefix;
+}
+
+/** Options for a client whose `paths` keep /me and /auth/logout under a prefix. */
+export interface PrefixedApiClientOptions<Prefix extends string> extends ApiClientOptions {
+	/** Where `paths` keeps /me and /auth/logout, for example '/api/v1'. */
+	apiPrefix: Prefix;
 }
 
 /**
- * The arguments for `paths` P: options are optional when P keeps /me and
- * /auth/logout unprefixed, `apiPrefix` is required (and checked) when it keeps
- * them under a prefix, and P without either pair is a type error.
+ * A non-empty prefix `paths` offers both `<prefix>/me` and
+ * `<prefix>/auth/logout` under; `never` when it offers none.
  */
-export type CreateApiClientArgs<P> = [ApiPrefixOf<P>] extends [never]
-	? [error: 'paths must offer <prefix>/me and <prefix>/auth/logout']
-	: '' extends ApiPrefixOf<P>
-		? [opts?: ApiClientOptions<ApiPrefixOf<P>>]
-		: [opts: ApiClientOptions<ApiPrefixOf<P>> & { apiPrefix: ApiPrefixOf<P> }];
+export type PrefixedApiPrefixOf<P> = Exclude<ApiPrefixOf<P>, ''>;
 
 // The prefix each client was made with, so getMe(api) and signOut(api) call
 // the right paths without repeating it.
@@ -118,11 +117,12 @@ const prefixes = new WeakMap<object, string>();
  * The prefix is already in the generated keys, so it does not change the
  * request URLs; it tells `getMe` and `signOut` which keys to call.
  */
-export function createApiClient<P extends object = BasePaths>(
-	...args: CreateApiClientArgs<P>
-): Client<P> {
-	const opts: ApiClientOptions<string> = (args[0] as ApiClientOptions<string> | undefined) ?? {};
-	const client = createClient<P>({
+export function createApiClient<P extends BasePaths = BasePaths>(opts?: ApiClientOptions): Client<P>;
+export function createApiClient<P extends object>(
+	opts: PrefixedApiClientOptions<PrefixedApiPrefixOf<P>>
+): Client<P>;
+export function createApiClient(opts: Partial<PrefixedApiClientOptions<string>> = {}): Client<object> {
+	const client = createClient<object>({
 		baseUrl: opts.baseUrl ?? '',
 		credentials: 'same-origin',
 		...(opts.fetch ? { fetch: opts.fetch } : {})
