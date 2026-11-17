@@ -121,3 +121,44 @@ func TestOnSignedInAloneKeepsCoresGate(t *testing.T) {
 		t.Errorf("hook calls for a bound subject = %d, want 1", calls)
 	}
 }
+
+// TestOpenSignUpAdmitsAnUnboundSubjectAndRefusesABlockedOne: the app's gate
+// as huddle-go runs it, through the hooks alone. A blocked subject is
+// refused even though it is bound, an unbound one is admitted under open
+// sign-up, and the users directory is written only for admitted subjects.
+func TestOpenSignUpAdmitsAnUnboundSubjectAndRefusesABlockedOne(t *testing.T) {
+	for name, c := range map[string]struct {
+		blocked, bound, open bool
+		status               int
+		recorded             bool
+	}{
+		"unbound, open sign-up":   {open: true, status: http.StatusFound, recorded: true},
+		"unbound, sign-up closed": {status: http.StatusForbidden},
+		"bound":                   {bound: true, status: http.StatusFound, recorded: true},
+		"bound but blocked":       {bound: true, blocked: true, status: http.StatusForbidden},
+		"unbound, blocked, open":  {blocked: true, open: true, status: http.StatusForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var recorded []string
+			rig := hookRig(t, func(_ context.Context, id Identity) error {
+				switch {
+				case c.blocked:
+					return ErrSignInRefused
+				case c.bound || c.open:
+					return nil
+				}
+				return ErrSignInRefused
+			}, func(_ context.Context, id Identity) { recorded = append(recorded, id.Sub) })
+			rec := signIn(t, rig)
+			if rec.Code != c.status {
+				t.Fatalf("callback = %d, want %d", rec.Code, c.status)
+			}
+			if got := len(recorded) == 1; got != c.recorded {
+				t.Errorf("users directory written = %v (%v), want %v", got, recorded, c.recorded)
+			}
+			if c.status == http.StatusFound {
+				wantSignedIn(t, rec)
+			}
+		})
+	}
+}

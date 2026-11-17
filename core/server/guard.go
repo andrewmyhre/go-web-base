@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 // ErrScopedWithoutGuard is returned by Build when a route declares a scoped
@@ -23,7 +24,8 @@ var ErrScopedWithoutGuard = errors.New("route declares a scoped permission but t
 // check runs, unchanged.
 type Guard interface {
 	// Check returns Status 0 to let the request through, or the status and
-	// detail to refuse it with.
+	// detail to refuse it with. A status outside 400-599 other than 0 is a
+	// bug in the Guard and is answered with 500.
 	Check(ctx context.Context, req GuardRequest) GuardResult
 }
 
@@ -91,6 +93,13 @@ func (g *guard) decide(ctx context.Context, p Permission, routePath string, r re
 		SessionLookupFailed: sessionLookupFailed(ctx),
 	})
 	d := decision{ctx: ctx, status: res.Status, detail: res.Detail, params: res.Params}
+	if res.Status != 0 && (res.Status < 400 || res.Status > 599) {
+		// A status outside 400-599 would let the request through with no
+		// handler run (a 2xx or 3xx) or be unwritable. It is the Guard's
+		// bug, and refusing is the safe reading.
+		g.log.Error("guard returned a status outside 400-599; answering 500", zap.Int("status", res.Status), zap.String("path", routePath), zap.String("request_id", RequestIDFromContext(ctx)))
+		d.status, d.detail, d.params = http.StatusInternalServerError, "internal error", nil
+	}
 	if res.Ctx != nil {
 		d.ctx = res.Ctx
 	}

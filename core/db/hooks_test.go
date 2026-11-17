@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/casbin/casbin/v2/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	sqlc "github.com/andrewmyhre/go-web-base/core/db/sqlc"
 )
 
 // TestLockOfIsTheLockCoreTakes: the same enforcer gives the same lock,
@@ -161,5 +164,30 @@ func TestNewEnforcerAppliesThePolicyWriteTimeout(t *testing.T) {
 	}
 	if _, err := NewEnforcer(context.Background(), pool, "", exampleRoles, WithPolicyWriteTimeout(time.Minute)); err != nil {
 		t.Fatalf("NewEnforcer with a generous timeout: %v", err)
+	}
+}
+
+// failingTx is a pgx.Tx whose Rollback fails.
+type failingTx struct{ pgx.Tx }
+
+func (failingTx) Rollback(context.Context) error {
+	return errors.New("rollback failed: connection lost")
+}
+
+type txDB struct{ deadlineDB }
+
+func (d *txDB) Begin(context.Context) (pgx.Tx, error) { return failingTx{}, nil }
+
+// TestRollbackFailureKeepsTheOriginalError: when the write timed out and the
+// rollback then failed too, errors.Is still sees the deadline, so a caller can
+// tell "state unknown, retry" from a refusal.
+func TestRollbackFailureKeepsTheOriginalError(t *testing.T) {
+	a := NewCasbinAdapter(&txDB{})
+	err := a.querierWithTx(context.Background(), func(sqlc.Querier) error { return context.DeadlineExceeded })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v; errors.Is(DeadlineExceeded) lost the original error", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "rollback failed") {
+		t.Errorf("err = %v, want the rollback failure kept too", err)
 	}
 }

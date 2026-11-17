@@ -84,6 +84,17 @@ func noteRequestSession(ctx context.Context, s *Session) context.Context {
 	return context.WithValue(ctx, sessionKey, s)
 }
 
+// NoteRequestUser records sub as the user of the request in the access log
+// (user_sub). The session middleware does it for a cookie session; app
+// Middleware or a Guard calls it for a bearer token, which core cannot
+// resolve itself. It does nothing outside a request that core is serving, and
+// the last call wins. It does not authenticate anyone.
+func NoteRequestUser(ctx context.Context, sub string) {
+	if info, ok := ctx.Value(requestInfoKey).(*requestInfo); ok {
+		info.userSub = sub
+	}
+}
+
 // SessionFromContext returns the session of the request, if a signed-in
 // user's cookie was presented and resolved.
 func SessionFromContext(ctx context.Context) (*Session, bool) {

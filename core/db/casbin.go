@@ -107,7 +107,7 @@ func (a *CasbinAdapter) querierWithTx(ctx context.Context, fn func(q sqlc.Querie
 	}
 	if err := fn(sqlc.New(tx)); err != nil {
 		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return fmt.Errorf("rollback: %w (original error: %v)", rbErr, err)
+			return fmt.Errorf("rollback: %w (original error: %w)", rbErr, err)
 		}
 		return err
 	}

@@ -319,3 +319,84 @@ func chiParam(r *http.Request, name string) string { return chi.URLParam(r, name
 type denyAll struct{}
 
 func (denyAll) Authorize(string, string, string, string) (bool, error) { return false, nil }
+
+// TestGuardStatusOutside400To599IsA500: a 2xx, 3xx, 1xx or negative status
+// from the Guard is its bug, answered 500 with no handler run and no Params
+// applied; 400 and 599 pass as given.
+func TestGuardStatusOutside400To599IsA500(t *testing.T) {
+	for status, want := range map[int]int{200: 500, 204: 500, 302: 500, 99: 500, -1: 500, 399: 500, 600: 500, 400: 400, 599: 599} {
+		ran := false
+		g := &recordingGuard{fn: func(context.Context, GuardRequest) GuardResult {
+			return GuardResult{Status: status, Detail: "d", Params: map[string]string{"id": "x"}}
+		}}
+		var logs bytes.Buffer
+		r := testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie).WithGuard(g)
+		if err := RegisterHandler(r, op(http.MethodGet, "/plain/{id}", Public), http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran = true })); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register(r, op(http.MethodGet, "/things/{id}", Public), func(ctx context.Context, in *guardIDInput) (*guardIDOutput, error) {
+			ran = true
+			return &guardIDOutput{}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h := mustBuild(t, r, bufferLogger(&logs))
+		for _, path := range []string{"/plain/1", "/things/1"} {
+			ran = false
+			rec := request(h, http.MethodGet, path, "")
+			if rec.Code != want || (want == 500 && ran) {
+				t.Errorf("Guard status %d on %s = %d (handler ran: %v), want %d", status, path, rec.Code, ran, want)
+			}
+			if want == 500 && strings.Contains(rec.Body.String(), `"d"`) {
+				t.Errorf("Guard status %d leaked its detail on a 500: %s", status, rec.Body)
+			}
+		}
+	}
+}
+
+// TestNoteRequestUserAttributesABearerRequest: a Middleware (or Guard) that
+// authenticated a bearer token names the user, and the access log carries it;
+// without the call the line is unattributed, and a session user is replaced
+// by the later call.
+func TestNoteRequestUserAttributesABearerRequest(t *testing.T) {
+	var logs bytes.Buffer
+	bearer := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "Bearer good" {
+				NoteRequestUser(r.Context(), "token-subject")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	r := testRouter("t", "0").WithAuth(newMemStore(), nil, testNames.SessionCookie).WithGuard(&recordingGuard{}).WithMiddleware(bearer)
+	if err := Register(r, op(http.MethodGet, "/things/{id}", Public), guardIDHandler); err != nil {
+		t.Fatal(err)
+	}
+	h := mustBuild(t, r, bufferLogger(&logs))
+	for _, c := range []struct{ auth, cookie, want string }{
+		{"Bearer good", "", "token-subject"},
+		{"", "", ""},
+		{"", testSessionID, testSub},
+		{"Bearer good", testSessionID, "token-subject"},
+	} {
+		logs.Reset()
+		req := httptest.NewRequest(http.MethodGet, "/things/1", nil)
+		if c.auth != "" {
+			req.Header.Set("Authorization", c.auth)
+		}
+		if c.cookie != "" {
+			req.AddCookie(&http.Cookie{Name: testNames.SessionCookie, Value: c.cookie})
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		var got any = "no api line"
+		for _, e := range logEntries(t, &logs) {
+			if e["scope"] == "api" {
+				got = e["user_sub"]
+			}
+		}
+		if got != c.want {
+			t.Errorf("auth %q cookie %q: user_sub = %v, want %q", c.auth, c.cookie, got, c.want)
+		}
+	}
+	NoteRequestUser(context.Background(), "x") // outside a request: a no-op
+}

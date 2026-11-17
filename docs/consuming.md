@@ -310,7 +310,11 @@ script, and in this repository it builds against `../../core` through a
   (`app.Options.Guard`, `Middleware`, `SignIn`, `OnSignedIn`, `APIPrefix`,
   `SkipBuiltins`, `Settings`, `PolicyWriteTimeout`, `Deps.Enforcer`,
   `db.LockOf`, and `server.Permission.Scope`), all additive and all unset by
-  default. An additive change to exported API is a
+  default. A Guard also takes on failing closed, rbac logging and lock
+  discipline; `core/README.md`, "Taking over authorization", lists the rules
+  (the Guard context derives from the request, no session store is required
+  so it must answer 401 and 503, core logs no rbac lines, `db.LockOf` is not
+  reentrant, a policy-write timeout leaves the state unknown). An additive change to exported API is a
   minor bump while we are before `v1`, a fix with no API change is a patch.
   The release notes of the GitHub release `ui/vX.Y.Z` say what changed.
 - All follow semver. A breaking change to an exported Go API, the `Install`

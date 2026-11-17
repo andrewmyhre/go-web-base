@@ -172,6 +172,22 @@ the behaviour of `v0.4.0` byte for byte (`core/app/golden_test.go` pins it).
   or a session store to build: the decision, and failing closed, are the
   Guard's. The function runs when the router is built, and also for
   `openapi`, with stand-in `Deps`.
+- **A Guard owns failing closed.** Read this before writing one:
+  - A `GuardResult.Ctx` must derive from the context passed to `Check`
+    (core's request id, permission note and session are on it); a context
+    built from `context.Background()` loses them.
+  - With a Guard set, `Build` no longer requires a session store or an
+    authorizer, so an app with no Redis or sessions still builds. The Guard
+    must therefore answer 401 for "no session" itself, and 503 when
+    `SessionLookupFailed` is set; nothing behind it will.
+  - Core logs **no rbac lines** for a route a Guard decides (it logs the api
+    access line as before). The app must log its own allow and deny
+    decisions, or refusals stop being visible in Loki.
+  - A status from `Check` other than 0 must be in 400-599. Anything else is
+    answered 500 and logged, and the request does not run.
+  - `server.NoteRequestUser(ctx, sub)` sets the access log's `user_sub` for a
+    request that did not come through the session cookie, such as a bearer
+    token. Call it from `Middleware` or the Guard once the token is verified.
 - **Scopes.** `server.Permission` has a `Scope` (`ScopeGlobal` by default,
   `ScopeProject`, `ScopeOrganization`; `p.In(scope)`). Core's own check ignores
   it, and `Build` refuses a scoped permission when there is no Guard
@@ -183,8 +199,17 @@ the behaviour of `v0.4.0` byte for byte (`core/app/golden_test.go` pins it).
 - **`Deps.Enforcer` and `RunDeps.Enforcer`** are the Casbin enforcer behind
   `Authorizer`. App code that writes bindings must hold
   `db.LockOf(enforcer).Lock()` for the write, the lock core's own reads take.
+  It is a plain `sync.RWMutex`, **not reentrant**: calling `db.BindRole`,
+  `db.Authorize` or any other core call on the same enforcer while holding it
+  deadlocks, because they take it themselves. Do the compound change under
+  the lock with the enforcer's own methods only.
 - **`PolicyWriteTimeout`** bounds each adapter write, so a hung database
-  cannot stall requests while the enforcer is locked. `db.NewEnforcer` takes
+  cannot stall requests while the enforcer is locked. A write that fails with
+  a deadline leaves the state **unknown**: the database may still have
+  committed it, and the enforcer's in-memory policy may differ. The error
+  wraps `context.DeadlineExceeded` (also when the rollback failed too), so
+  test with `errors.Is`, and reload or retry rather than assuming either
+  outcome. `db.NewEnforcer` takes
   `db.WithPolicyWriteTimeout(d)`.
 
 ### Taking over sign-in
