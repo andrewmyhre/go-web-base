@@ -56,6 +56,18 @@ type Installer struct {
 
 	settings   *Settings
 	migrations bool
+	// bare is the app's own installer (Options.Settings): its settings have
+	// no feature prefix.
+	bare bool
+}
+
+// prefix is what a setting key is prefixed with: the feature's name, or
+// nothing for the app's own settings.
+func (i *Installer) prefix() string {
+	if i.bare {
+		return ""
+	}
+	return i.name + "_"
 }
 
 // Name is the feature's name.
@@ -95,6 +107,9 @@ func (i *Installer) Grant(role string, perms ...server.Permission) error {
 // startup after core's and the earlier features', each module in its own
 // version table, goose_<name>_version. Call it at most once.
 func (i *Installer) Migrations(fsys fs.FS) error {
+	if i.bare {
+		return errors.New("app settings: Installer.Migrations is not available here; use app.Options.Migrations")
+	}
 	if fsys == nil {
 		return fmt.Errorf("feature %s: Migrations(nil)", i.name)
 	}
@@ -159,7 +174,7 @@ func (i *Installer) declare(key string, def any, help string, flag func(*pflag.F
 	if !settingKey.MatchString(key) {
 		return fmt.Errorf("feature %s: setting key %q must be lower case letters, digits and underscores, starting with a letter", i.name, key)
 	}
-	vkey := i.name + "_" + key
+	vkey := i.prefix() + key
 	if slices.Contains(i.inst.v.AllKeys(), vkey) {
 		return fmt.Errorf("feature %s: setting %q clashes with an existing setting", i.name, key)
 	}
@@ -181,6 +196,7 @@ func (i *Installer) declare(key string, def any, help string, flag func(*pflag.F
 // feature declared, without the feature's prefix.
 type Settings struct {
 	feature  string
+	bare     bool // no prefix: the app's own settings
 	v        *viper.Viper
 	declared map[string]bool
 }
@@ -188,6 +204,9 @@ type Settings struct {
 func (s *Settings) key(k string) string {
 	if !s.declared[k] {
 		panic(fmt.Sprintf("feature %s reads setting %q it never declared", s.feature, k))
+	}
+	if s.bare {
+		return k
 	}
 	return s.feature + "_" + k
 }
@@ -260,6 +279,12 @@ func newInstallation(o Options) (*installation, error) {
 	for _, def := range o.Resources {
 		if err := n.registerResource(def); err != nil {
 			return nil, fmt.Errorf("app resources: %w", err)
+		}
+	}
+	if o.Settings != nil {
+		i := &Installer{inst: n, name: "app", bare: true, settings: &Settings{feature: "app", bare: true, v: n.v, declared: map[string]bool{}}}
+		if err := o.Settings(i); err != nil {
+			return nil, fmt.Errorf("app settings: %w", err)
 		}
 	}
 	names := map[string]bool{}

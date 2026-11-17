@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 )
 
 type ctxKey int
@@ -39,29 +40,37 @@ func noteRequestPermission(ctx context.Context, p Permission) context.Context {
 // withPermission is the Huma middleware every operation carries: it puts
 // the declared permission on the request context, where the access log can
 // read it, and then runs the authorization check, answering 401, 403 or 503
-// itself when the check refuses the request.
-func withPermission(api huma.API, g *guard, p Permission) func(huma.Context, func(huma.Context)) {
+// itself when the check refuses the request. path is the route pattern as
+// registered.
+func withPermission(api huma.API, g *guard, p Permission, path string) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		rctx := noteRequestPermission(ctx.Context(), p)
-		if status, detail := g.check(rctx, p); status != 0 {
-			_ = huma.WriteErr(api, ctx, status, detail)
+		d := g.decide(rctx, p, path, viewOfHuma(ctx))
+		if d.status != 0 {
+			_ = huma.WriteErr(api, ctx, d.status, d.detail)
 			return
 		}
-		next(huma.WithContext(ctx, rctx))
+		if len(d.params) > 0 {
+			r, _ := humachi.Unwrap(ctx)
+			rewriteParams(r, d.params)
+		}
+		next(huma.WithContext(ctx, d.ctx))
 	}
 }
 
 // setPermission is the chi equivalent, for routes that are not Huma
 // operations (the OpenAPI spec and the sign-in redirects).
-func setPermission(g *guard, p Permission) func(http.Handler) http.Handler {
+func setPermission(g *guard, p Permission, path string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := noteRequestPermission(r.Context(), p)
-			if status, detail := g.check(ctx, p); status != 0 {
-				writeProblem(w, status, detail)
+			d := g.decide(ctx, p, path, viewOfRequest(r))
+			if d.status != 0 {
+				writeProblem(w, d.status, d.detail)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(ctx))
+			rewriteParams(r, d.params)
+			next.ServeHTTP(w, r.WithContext(d.ctx))
 		})
 	}
 }
@@ -73,6 +82,17 @@ func noteRequestSession(ctx context.Context, s *Session) context.Context {
 		info.userSub = s.UserID
 	}
 	return context.WithValue(ctx, sessionKey, s)
+}
+
+// NoteRequestUser records sub as the user of the request in the access log
+// (user_sub). The session middleware does it for a cookie session; app
+// Middleware or a Guard calls it for a bearer token, which core cannot
+// resolve itself. It does nothing outside a request that core is serving, and
+// the last call wins. It does not authenticate anyone.
+func NoteRequestUser(ctx context.Context, sub string) {
+	if info, ok := ctx.Value(requestInfoKey).(*requestInfo); ok {
+		info.userSub = sub
+	}
 }
 
 // SessionFromContext returns the session of the request, if a signed-in

@@ -80,8 +80,25 @@ var ErrSignInRefused = errors.New("sign-in refused")
 // or a retry after a failure binding the role), so it must be idempotent.
 type FirstSignIn func(ctx context.Context, id Identity) (role string, err error)
 
+// SignIn is the app's sign-in gate. It replaces core's gate (the binding
+// check, the FirstSignIn hook and the default role) when set with
+// Auth.WithSignIn. It returns nil to admit the subject, ErrSignInRefused to
+// refuse it with 403, and any other error to answer 503 so the user can
+// retry. The subject need not hold a role binding. It runs before the
+// session exists and may run more than once for one subject, so it must be
+// idempotent.
+type SignIn func(ctx context.Context, id Identity) error
+
+// OnSignedIn runs after the sign-in gate has admitted a subject and before
+// the session is minted. It has no way to refuse the sign-in; the app logs
+// its own failures.
+type OnSignedIn func(ctx context.Context, id Identity)
+
 // Auth serves the Google sign-in flow and logout.
 type Auth struct {
+	signIn     SignIn
+	onSignedIn OnSignedIn
+
 	first    FirstSignIn
 	defRole  string
 	binder   RoleBinder
@@ -138,6 +155,15 @@ func (a *Auth) WithFirstSignIn(hook FirstSignIn, defaultRole string, binder Role
 		return a
 	}
 	a.first, a.defRole, a.binder = hook, defaultRole, binder
+	return a
+}
+
+// WithSignIn replaces core's sign-in gate with signIn and runs onSignedIn
+// for each admitted subject. Either may be nil: a nil signIn keeps core's
+// gate, a nil onSignedIn runs nothing. It returns a, so it chains after
+// NewAuth.
+func (a *Auth) WithSignIn(signIn SignIn, onSignedIn OnSignedIn) *Auth {
+	a.signIn, a.onSignedIn = signIn, onSignedIn
 	return a
 }
 
@@ -254,6 +280,9 @@ func (a *Auth) Callback() http.Handler {
 			writeProblem(w, status, msg)
 			return
 		}
+		if a.onSignedIn != nil {
+			a.onSignedIn(r.Context(), id)
+		}
 		s := &Session{UserID: id.Sub, Name: id.Name, Email: id.Email, Avatar: id.Picture}
 		sid, err := a.sessions.Create(r.Context(), SessionTTL, s.data())
 		if err != nil {
@@ -271,6 +300,9 @@ func (a *Auth) Callback() http.Handler {
 // binding and 503 when the bindings cannot be read (fail closed), and logs
 // one rbac line either way. The caller's response carries no reason.
 func (a *Auth) gate(r *http.Request, id Identity) int {
+	if a.signIn != nil {
+		return a.appGate(r, id)
+	}
 	sub := id.Sub
 	decision := logging.RBACDecision{
 		Subject:   sub,
@@ -306,6 +338,36 @@ func (a *Auth) gate(r *http.Request, id Identity) int {
 	decision.Decision = logging.Allow
 	rbac.Check(decision)
 	return 0
+}
+
+// appGate is the gate when the app supplied SignIn. It logs the same one
+// rbac line core's gate does, with the decision taken from the hook's
+// result, and answers with the same statuses.
+func (a *Auth) appGate(r *http.Request, id Identity) int {
+	rid := RequestIDFromContext(r.Context())
+	decision := logging.RBACDecision{
+		Subject:   id.Sub,
+		Domain:    signInDomain,
+		Object:    signInObject,
+		Decision:  logging.Deny,
+		RequestID: rid,
+	}
+	rbac := logging.New(a.log)
+	err := a.signIn(r.Context(), id)
+	switch {
+	case err == nil:
+		decision.Decision = logging.Allow
+		rbac.Check(decision)
+		return 0
+	case errors.Is(err, ErrSignInRefused):
+		a.log.Info("sign-in refused by the app", zap.String("user_sub", id.Sub), zap.String("request_id", rid))
+		rbac.Check(decision)
+		return http.StatusForbidden
+	default:
+		a.log.Warn("sign-in hook failed", zap.String("user_sub", id.Sub), zap.String("request_id", rid), zap.String("error", a.redact.Redact(err.Error())))
+		rbac.Check(decision)
+		return http.StatusServiceUnavailable
+	}
 }
 
 // firstSignIn admits a subject with no binding through the app's hook and

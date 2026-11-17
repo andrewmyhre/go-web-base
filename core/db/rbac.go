@@ -241,7 +241,9 @@ func CloneRoles(roles []RoleDef) []RoleDef {
 // from a role stops applying on the next start. Running it again over the
 // same pool (a restart) writes nothing. The admin binding is only ever
 // added: changing adminSub does not revoke the previous admin.
-func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string, roles []RoleDef) (*casbin.Enforcer, error) {
+//
+// EnforcerOptions tune the adapter; with none, behaviour is unchanged.
+func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string, roles []RoleDef, opts ...EnforcerOption) (*casbin.Enforcer, error) {
 	if err := ValidateRoles(roles); err != nil {
 		return nil, err
 	}
@@ -254,7 +256,11 @@ func NewEnforcer(ctx context.Context, pool *pgxpool.Pool, adminSub string, roles
 	if err != nil {
 		return nil, fmt.Errorf("build rbac model: %w", err)
 	}
-	e, err := casbin.NewEnforcer(m, NewCasbinAdapter(pool))
+	adapter := NewCasbinAdapter(pool)
+	for _, opt := range opts {
+		opt(adapter)
+	}
+	e, err := casbin.NewEnforcer(m, adapter)
 	if err != nil {
 		return nil, fmt.Errorf("new casbin enforcer: %w", err)
 	}
@@ -354,7 +360,13 @@ func refuseRoleName(e *casbin.Enforcer, sub string) error {
 // bootstrap, before serving) bypasses it, which is fine before any request.
 var locks sync.Map // *casbin.Enforcer -> *sync.RWMutex
 
-func lockOf(e *casbin.Enforcer) *sync.RWMutex {
+// LockOf returns the lock core takes around every read and write it makes on
+// e. App code that writes bindings straight to the enforcer (Bind, Unbind,
+// a bootstrap claim) must hold LockOf(e).Lock() for the write, and an
+// RLock for a read that must not see a half-applied change, or Casbin fails
+// with "concurrent map writes". The same enforcer always returns the same
+// lock.
+func LockOf(e *casbin.Enforcer) *sync.RWMutex {
 	l, _ := locks.LoadOrStore(e, &sync.RWMutex{})
 	return l.(*sync.RWMutex)
 }
@@ -373,7 +385,7 @@ func BindRole(e *casbin.Enforcer, sub, role string) error {
 	if sub == "" {
 		return ErrEmptySubject
 	}
-	l := lockOf(e)
+	l := LockOf(e)
 	l.Lock()
 	defer l.Unlock()
 	if err := refuseRoleName(e, sub); err != nil {
@@ -398,7 +410,7 @@ func BindRole(e *casbin.Enforcer, sub, role string) error {
 // addition. It denies, with an error, an empty subject or one that is a role
 // name. Every error is a denial.
 func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, error) {
-	l := lockOf(e)
+	l := LockOf(e)
 	l.RLock()
 	defer l.RUnlock()
 	if sub == "" {
@@ -428,7 +440,7 @@ func Authorize(e *casbin.Enforcer, sub, project, object, action string) (bool, e
 // refuses, with an error, an empty subject or one that is a role name, so
 // a role can never sign in as itself. Every error is a refusal.
 func HasRoleBinding(e *casbin.Enforcer, sub string) (bool, error) {
-	l := lockOf(e)
+	l := LockOf(e)
 	l.RLock()
 	defer l.RUnlock()
 	if sub == "" {
@@ -457,7 +469,7 @@ type Binding struct {
 // empty, non-nil slice. Like HasRoleBinding it refuses, with an error, an
 // empty subject or one that is a role name.
 func RoleBindingsOf(e *casbin.Enforcer, sub string) ([]Binding, error) {
-	l := lockOf(e)
+	l := LockOf(e)
 	l.RLock()
 	defer l.RUnlock()
 	if sub == "" {
