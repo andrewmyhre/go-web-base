@@ -8,8 +8,9 @@ version bump (through `copier update`, see below).
 
 | Export | What it is |
 |---|---|
-| `AccountMenu`, `AccountModal`, `Avatar`, `SideMenu`, `UserBadge` | Components, from `@andrewmyhre/web-base-ui` |
+| `AccountMenu`, `AccountModal`, `Avatar`, `SideMenu`, `SiteSettings`, `UserBadge` | Components, from `@andrewmyhre/web-base-ui` |
 | `createApiClient<paths>()`, `getMe`, `signOut`, `roleLabel`, `ApiError`, `SIGN_IN_PATH`, `LOGOUT_PATH`, types `Me`, `MeRole`, `BasePaths`, `ApiClient` | The API client helpers, from `@andrewmyhre/web-base-ui` or `@andrewmyhre/web-base-ui/api` |
+| `listSiteSettings`, `updateSiteSetting`, `listSiteInvites`, `createSiteInvite`, `revokeSiteInvite`, `AdminApiError`, types `SiteSetting`, `SiteInvite`, `SiteSettingsPaths` | The site settings API helpers (core's `/admin/settings` and `/admin/invites`), from the root or `/api`. `<SiteSettings client={api} />` is the page built on them |
 | `strategyFor`, `isApiPath`, `API_PREFIXES` | The service worker policy, from `@andrewmyhre/web-base-ui/sw-policy` |
 
 `package.json` `exports` has `svelte` and `types` conditions for the root

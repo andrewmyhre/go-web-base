@@ -1,6 +1,21 @@
 {
   "components": {
     "schemas": {
+      "CreateInviteInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "The address to invite. Its first sign-in with this Google-verified address is let in.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
       "ErrorDetail": {
         "additionalProperties": false,
         "properties": {
@@ -105,7 +120,88 @@
         ],
         "type": "object"
       },
-[[% endif %]]      "MeOutputBody": {
+[[% endif %]]      "InviteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "consumed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "consumed_by": {
+            "description": "The account id that used it.",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "description": "Who created it (an account id).",
+            "type": "string"
+          },
+          "email": {
+            "description": "The invited address, lower case.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The invite's id.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "pending can still be used; revoked was withdrawn; consumed admitted a first sign-in.",
+            "enum": [
+              "pending",
+              "revoked",
+              "consumed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ListInvitesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "invites": {
+            "description": "Every invite, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/InviteBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "invites"
+        ],
+        "type": "object"
+      },
+      "ListSettingsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/SettingBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "type": "object"
+      },
+      "MeOutputBody": {
         "additionalProperties": false,
         "properties": {
           "avatar": {
@@ -158,6 +254,70 @@
           "domain"
         ],
         "type": "object"
+      },
+      "SettingBody": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "The value when nobody has set one.",
+            "type": "string"
+          },
+          "description": {
+            "description": "What the setting does.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The setting's key.",
+            "type": "string"
+          },
+          "label": {
+            "description": "A short name for display.",
+            "type": "string"
+          },
+          "options": {
+            "description": "The values the setting allows.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "description": "When an admin last changed it. Absent while it is at its default.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "updated_by": {
+            "description": "Who last changed it (an account id).",
+            "type": "string"
+          },
+          "value": {
+            "description": "The current value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "description",
+          "options",
+          "value",
+          "default"
+        ],
+        "type": "object"
+      },
+      "UpdateSettingInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "description": "The new value; it must be one of the setting's options.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
       }
     }
   },
@@ -167,6 +327,199 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/invites": {
+      "get": {
+        "operationId": "list-site-invites",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListInvitesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the sign-up invites",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Core sends no email: share the site's sign-in link with the person.",
+        "operationId": "create-site-invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Invite an email address",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/invites/{id}": {
+      "delete": {
+        "operationId": "revoke-site-invite",
+        "parameters": [
+          {
+            "description": "The invite's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "The invite's id.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke a pending invite",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings": {
+      "get": {
+        "operationId": "list-site-settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSettingsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the site settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/{key}": {
+      "put": {
+        "operationId": "update-site-setting",
+        "parameters": [
+          {
+            "description": "The setting's key.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "description": "The setting's key.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a site setting",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/auth/logout": {
       "post": {
         "operationId": "auth-logout",

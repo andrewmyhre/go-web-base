@@ -16,6 +16,7 @@ import (
 	"github.com/andrewmyhre/go-web-base/core/db"
 	"github.com/andrewmyhre/go-web-base/core/logging"
 	"github.com/andrewmyhre/go-web-base/core/server"
+	"github.com/andrewmyhre/go-web-base/core/sitesettings"
 )
 
 // A Feature is an optional module an app installs through Options.Features:
@@ -276,6 +277,15 @@ func newInstallation(o Options) (*installation, error) {
 		return nil, err
 	}
 	n := &installation{o: o, v: config.NewViper(o.EnvPrefix), resources: server.NewResources()}
+	// Core's own resources: the site settings and invites, managed by Admin.
+	for _, def := range sitesettings.Resources() {
+		if err := n.registerResource(def); err != nil {
+			return nil, fmt.Errorf("core resource: %w (core registers %s and %s for the site settings routes)", err, sitesettings.SettingsResource, sitesettings.InvitesResource)
+		}
+	}
+	for _, p := range sitesettings.AdminPermissions() {
+		n.grants = append(n.grants, grant{feature: "core", role: db.AdminRole, perm: p.String()})
+	}
 	for _, def := range o.Resources {
 		if err := n.registerResource(def); err != nil {
 			return nil, fmt.Errorf("app resources: %w", err)
@@ -324,6 +334,9 @@ func (n *installation) assembleRoles() error {
 	roles := db.CloneRoles(n.o.Roles)
 	for _, g := range n.grants {
 		found := false
+		if g.feature == "core" && !slices.ContainsFunc(roles, func(r db.RoleDef) bool { return r.Name == g.role }) {
+			continue // no Admin: ValidateRoles says so, in terms the app knows
+		}
 		for i := range roles {
 			if roles[i].Name == g.role {
 				roles[i].Permissions = append(roles[i].Permissions, g.perm)

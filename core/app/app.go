@@ -41,6 +41,7 @@ import (
 	"github.com/andrewmyhre/go-web-base/core/logger"
 	"github.com/andrewmyhre/go-web-base/core/redis"
 	"github.com/andrewmyhre/go-web-base/core/server"
+	"github.com/andrewmyhre/go-web-base/core/sitesettings"
 )
 
 // Options are the values core cannot know: everything specific to one app.
@@ -415,6 +416,11 @@ type Deps struct {
 	// openapi command (Routes must not touch it at registration). Do not
 	// close it: serve does, after the listener and Options.Run are done.
 	Pool *pgxpool.Pool
+	// SiteSettings is the site's own settings and invites (sign-up mode),
+	// nil without a database and under openapi. An app that replaces core's
+	// sign-in gate (Options.SignIn) calls its Admit and Admitted from its
+	// own gate to honour the sign-up mode.
+	SiteSettings *sitesettings.Store
 }
 
 // newRouter registers every operation the API serves: the built-ins, then
@@ -463,6 +469,13 @@ func registerBuiltins(router *server.Router, o Options, d Deps) error {
 		return nil
 	}
 	router.WithAuth(d.Sessions, d.Authorizer, o.names().SessionCookie)
+	// The admin routes need something to decide who is an Admin: core's
+	// authorizer, or the app's Guard.
+	if d.Authorizer != nil || o.Guard != nil {
+		if err := sitesettings.Routes(router, o.APIPrefix, d.SiteSettings); err != nil {
+			return err
+		}
+	}
 	if !slices.Contains(o.SkipBuiltins, skipMe) {
 		if err := server.Register(router, server.Operation{
 			OperationID: "get-me",
@@ -640,6 +653,7 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 		}
 		closers = append(closers, pool.Close)
 		d.Pool = pool
+		d.SiteSettings = sitesettings.New(pool)
 		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub, inst.roles, db.WithPolicyWriteTimeout(o.PolicyWriteTimeout))
 		if err != nil {
 			return d, cleanup, err
@@ -670,6 +684,9 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 	d.Auth = server.NewAuth(google, sessions, attempts, bindings, log, cfg.GoogleClientSecret, o.names())
 	if o.OnFirstSignIn != nil || o.DefaultRole != "" {
 		d.Auth = d.Auth.WithFirstSignIn(o.OnFirstSignIn, o.DefaultRole, binder)
+	}
+	if d.SiteSettings != nil {
+		d.Auth = d.Auth.WithSignUpPolicy(d.SiteSettings)
 	}
 	if o.SignIn != nil || o.OnSignedIn != nil {
 		d.Auth = d.Auth.WithSignIn(o.SignIn, o.OnSignedIn)

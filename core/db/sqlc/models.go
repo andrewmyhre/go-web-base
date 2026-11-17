@@ -18,3 +18,20 @@ type CasbinRule struct {
 	V4    pgtype.Text
 	V5    pgtype.Text
 }
+
+type SiteInvite struct {
+	ID         int64
+	Email      string
+	CreatedBy  string
+	CreatedAt  pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	ConsumedAt pgtype.Timestamptz
+	ConsumedBy pgtype.Text
+}
+
+type SiteSetting struct {
+	Key       string
+	Value     []byte
+	UpdatedAt pgtype.Timestamptz
+	UpdatedBy string
+}

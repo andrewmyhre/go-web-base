@@ -49,6 +49,9 @@
 		<a class="button" href={SIGN_IN_PATH} data-sveltekit-reload>Sign in with Google</a>
 	{:else if view.kind === 'signed-in'}
 		<UserBadge name={view.user.name} avatar={view.user.avatar} />
+		{#if view.user.roles.some((r) => r.role === 'Admin' && r.domain === 'global')}
+			<p><a href="/settings">Site settings</a></p>
+		{/if}
 	{:else}
 		<p class="status" role="alert">Could not reach [[ project_name ]]. Try again.</p>
 		<button class="button" type="button" onclick={load}>Retry</button>
