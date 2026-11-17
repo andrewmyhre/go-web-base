@@ -49,7 +49,9 @@ typed API client helpers and the service worker policy. It is not on an npm
 registry. Each release attaches its tarball to a GitHub release `ui/vX.Y.Z`,
 and the template's `ui/package.json` depends on that file's URL. Because the URL is pinned by the template, UI updates arrive through
 `copier update`. Feature UI packages, such as `@andrewmyhre/web-base-agent-ui`,
-are **planned** (IMM-2076, IMM-2077).
+are **planned** (IMM-2076, IMM-2077). What the first real feature, `agent`, contains and how it couples to an app is
+recorded in [ADR 0001](adr/0001-agent-client-module.md); its Copier question
+will be `feature_agent`.
 
 ## Starting a project
 
