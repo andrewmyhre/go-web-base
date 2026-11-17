@@ -1,7 +1,7 @@
-github.com/andrewmyhre/go-web-base/core v0.6.0 h1:h3LIdeI6uUv1Rv+35zj2efVJjq4Qt7n+5qRBn+mgD0o=
-github.com/andrewmyhre/go-web-base/core v0.6.0/go.mod h1:Tp2jEABdmcSoMOqydoguqbNNJhxA1EJJLfsaAvlDcHg=
-github.com/andrewmyhre/go-web-base/features/example v0.6.0 h1:iDkaU7P2wb3ihXtfZ8PxsFMLP9nWuwKwXFcfPjSZubE=
-github.com/andrewmyhre/go-web-base/features/example v0.6.0/go.mod h1:lmfdmbe55Q9HBpEhc1MaqM7C81B5r9QuSuJPITp64LE=
+github.com/andrewmyhre/go-web-base/core v0.7.0 h1:Mzhp9zpU+gP0+0R4fwZb8E6/bQLMuM6w9aLuazGEpwA=
+github.com/andrewmyhre/go-web-base/core v0.7.0/go.mod h1:Tp2jEABdmcSoMOqydoguqbNNJhxA1EJJLfsaAvlDcHg=
+github.com/andrewmyhre/go-web-base/features/example v0.7.0 h1:a5w1iiodfscFApK/ouS9uKkf9cWR7wt4kx6crRK5ruk=
+github.com/andrewmyhre/go-web-base/features/example v0.7.0/go.mod h1:9neBvOjkC1jvrZbaMuPwFQN6bXqldXuMTFbCMz/2CTE=
 github.com/bmatcuk/doublestar/v4 v4.6.1 h1:FH9SifrbvJhnlQpztAx++wlkk70QBf0iBWDwNy7PA4I=
 github.com/bmatcuk/doublestar/v4 v4.6.1/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
