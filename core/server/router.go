@@ -89,13 +89,17 @@ type Router struct {
 	// resources are the resources a route's permission may name. Build
 	// checks every route against it.
 	resources *Resources
+	// guard, when set, replaces core's check on every route (WithGuard).
+	guard Guard
+	// middleware runs after the session middleware (WithMiddleware).
+	middleware []func(http.Handler) http.Handler
 }
 
 // NewRouter returns a router holding only the OpenAPI spec route. title and
 // version describe the API in its OpenAPI document.
 func NewRouter(title, version string) *Router {
 	r := &Router{title: title, version: version, resources: NewResources()}
-	r.regs = append(r.regs, specRegistration())
+	r.regs = append(r.regs, specRegistration(OpenAPIPath))
 	return r
 }
 
@@ -129,6 +133,37 @@ func (r *Router) WithAuth(sessions SessionStore, authorizer Authorizer, sessionC
 	return r
 }
 
+// WithGuard makes g decide every route in place of core's own check. A
+// nil g leaves core's check in place. With a Guard the router no longer
+// needs an authorizer or session store to serve a non-public route: the
+// decision, and failing closed, are the Guard's. Scoped permissions need
+// one, and Build refuses them without it (ErrScopedWithoutGuard).
+func (r *Router) WithGuard(g Guard) *Router {
+	r.guard = g
+	return r
+}
+
+// WithMiddleware adds middleware that runs on every request after the
+// access log, recovery and the session middleware and before the route's
+// check, outermost first in the order given. Calls accumulate.
+func (r *Router) WithMiddleware(mw ...func(http.Handler) http.Handler) *Router {
+	for _, m := range mw {
+		if m != nil {
+			r.middleware = append(r.middleware, m)
+		}
+	}
+	return r
+}
+
+// WithOpenAPIPath serves the OpenAPI document at path instead of
+// OpenAPIPath. Call it before registering routes. An empty path is ignored.
+func (r *Router) WithOpenAPIPath(path string) *Router {
+	if path != "" {
+		r.regs[0] = specRegistration(path)
+	}
+	return r
+}
+
 // Register adds an operation, served by handler, to r. Registration is
 // refused for an operation that does not declare a permission, so an
 // unprotected route can never exist in the router.
@@ -152,7 +187,7 @@ func Register[I, O any](r *Router, op Operation, handler func(context.Context, *
 			Description: op.Description,
 			Tags:        op.Tags,
 			Metadata:    map[string]any{MetadataPermission: permission},
-			Middlewares: huma.Middlewares{withPermission(api, g, permission)},
+			Middlewares: huma.Middlewares{withPermission(api, g, permission, op.Path)},
 		}, handler)
 	}
 	return r.add(reg)
@@ -173,7 +208,7 @@ func RegisterHandler(r *Router, op Operation, h http.Handler) error {
 		operationID: op.OperationID,
 	}
 	reg.mount = func(_ huma.API, mux chi.Router, g *guard) {
-		mux.With(setPermission(g, op.Permission)).Method(op.Method, op.Path, h)
+		mux.With(setPermission(g, op.Permission, op.Path)).Method(op.Method, op.Path, h)
 	}
 	return r.add(reg)
 }
@@ -258,11 +293,14 @@ func (r *Router) build(log *zap.Logger) (huma.API, http.Handler, error) {
 		if err := r.checkAuth(reg); err != nil {
 			return nil, nil, err
 		}
+		if reg.permission.IsScoped() && r.guard == nil {
+			return nil, nil, fmt.Errorf("route %s %s (%s): %w", reg.method, reg.path, reg.permission, ErrScopedWithoutGuard)
+		}
 	}
 	if r.sessions != nil && r.sessionCookie == "" {
 		return nil, nil, ErrNoSessionCookie
 	}
-	g := &guard{authorizer: r.authorizer, log: log}
+	g := &guard{authorizer: r.authorizer, log: log, custom: r.guard}
 
 	mux := chi.NewRouter()
 	// accessLog is outermost so it still logs a request whose handler
@@ -273,6 +311,9 @@ func (r *Router) build(log *zap.Logger) (huma.API, http.Handler, error) {
 	// account ID lands in the access log.
 	if r.sessions != nil {
 		mux.Use(sessionMiddleware(r.sessions, r.sessionCookie, log))
+	}
+	if len(r.middleware) > 0 {
+		mux.Use(r.middleware...)
 	}
 
 	var api huma.API
@@ -326,10 +367,10 @@ func catch(what string, fn func()) (err error) {
 
 // specRegistration serves the generated OpenAPI document. It is rendered on
 // first request, after every operation has been added to the API.
-func specRegistration() registration {
+func specRegistration(path string) registration {
 	return registration{
 		method:     http.MethodGet,
-		path:       OpenAPIPath,
+		path:       path,
 		permission: Public,
 		mount: func(api huma.API, mux chi.Router, g *guard) {
 			var (
@@ -337,7 +378,7 @@ func specRegistration() registration {
 				body []byte
 				err  error
 			)
-			mux.With(setPermission(g, Public)).Get(OpenAPIPath, func(w http.ResponseWriter, _ *http.Request) {
+			mux.With(setPermission(g, Public, path)).Get(path, func(w http.ResponseWriter, _ *http.Request) {
 				once.Do(func() { body, err = json.Marshal(api.OpenAPI()) })
 				if err != nil {
 					http.Error(w, "render OpenAPI spec", http.StatusInternalServerError)
@@ -369,7 +410,7 @@ func routeShape(path string) string {
 // checkAuth refuses a route the router could not authorize.
 func (r *Router) checkAuth(reg registration) error {
 	p := reg.permission
-	if p.IsPublic() {
+	if p.IsPublic() || r.guard != nil {
 		return nil
 	}
 	if r.sessions == nil {

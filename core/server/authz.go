@@ -71,6 +71,8 @@ const authenticatedObject = "authenticated"
 type guard struct {
 	authorizer Authorizer
 	log        *zap.Logger
+	// custom, when not nil, decides every route instead of check.
+	custom Guard
 }
 
 // check returns 0 to let the request through, or the status and detail to

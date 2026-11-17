@@ -26,10 +26,12 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/casbin/casbin/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -123,11 +125,57 @@ type Options struct {
 	//
 	// It never runs under the openapi command. Optional.
 	Run func(ctx context.Context, d RunDeps) error
+
+	// Guard supplies the app's per-route authorization check. When set it
+	// replaces core's check on every route, built-ins and feature routes
+	// included, so it must handle Public, Authenticated and global
+	// permissions as core's does. It is called once, when the router is
+	// built, with the Deps the routes get (the enforcer, the session
+	// store). Scoped permissions (server.ScopeProject, ScopeOrganization)
+	// need it: Build refuses them without. Unset keeps core's check.
+	Guard func(d Deps) server.Guard
+	// Middleware runs on every request after the access log, recovery and
+	// the session middleware, before the route's check, in the order given.
+	// An app puts bearer-token authentication here.
+	Middleware []func(http.Handler) http.Handler
+	// SignIn replaces core's sign-in gate (the binding check, OnFirstSignIn
+	// and DefaultRole, which it may not be combined with). It returns nil to
+	// admit, server.ErrSignInRefused for 403, any other error for 503. A
+	// subject it admits needs no role binding. Optional.
+	SignIn func(ctx context.Context, id server.Identity) error
+	// OnSignedIn runs for a subject the gate admitted, before its session
+	// is minted. It cannot refuse the sign-in. Optional.
+	OnSignedIn func(ctx context.Context, id server.Identity)
+	// APIPrefix, such as "/api/v1", is put in front of /me, /auth/logout
+	// and /openapi.json. /auth/google, its callback and /health stay at the
+	// root. Empty keeps every built-in at the root. It starts with "/" and
+	// does not end with one.
+	APIPrefix string
+	// SkipBuiltins names built-in routes core does not register because
+	// the app registers its own: "me". Optional.
+	SkipBuiltins []string
+	// Settings declares the app's own settings with no feature prefix:
+	// String("runtime_driver", ...) is the variable <EnvPrefix>_RUNTIME_DRIVER
+	// and the flag --runtime-driver. A key that core or a feature already
+	// uses is refused. Installer.Migrations is refused here: use
+	// Options.Migrations. Optional.
+	Settings func(i *Installer) error
+	// PolicyWriteTimeout bounds every write the Casbin adapter makes, so a
+	// hung database cannot stall requests while the enforcer is locked.
+	// Zero keeps today's behaviour, no bound.
+	PolicyWriteTimeout time.Duration
 }
+
+// Built-in routes SkipBuiltins may name.
+const skipMe = "me"
 
 // RunDeps are what Options.Run gets. Pool and Authorizer are nil when
 // <EnvPrefix>_DATABASE_DSN is not set.
 type RunDeps struct {
+	// Enforcer is the Casbin enforcer behind Authorizer; nil without a
+	// database. App code that writes bindings holds db.LockOf(Enforcer)
+	// for the write.
+	Enforcer *casbin.Enforcer
 	// Pool is the Postgres pool serve opened, migrations applied. It is
 	// closed only after Run has returned.
 	Pool *pgxpool.Pool
@@ -153,6 +201,20 @@ func (o Options) validate() (Options, error) {
 	}
 	if len(o.Roles) == 0 {
 		return o, errors.New("app.Options.Roles is required: core ships no roles, the app supplies its role graph")
+	}
+	if o.APIPrefix != "" && (!strings.HasPrefix(o.APIPrefix, "/") || strings.HasSuffix(o.APIPrefix, "/")) {
+		return o, fmt.Errorf("app.Options.APIPrefix %q must start with / and not end with one", o.APIPrefix)
+	}
+	for _, name := range o.SkipBuiltins {
+		if name != skipMe {
+			return o, fmt.Errorf("app.Options.SkipBuiltins has %q; the built-ins that can be skipped are %q", name, skipMe)
+		}
+	}
+	if o.SignIn != nil && (o.OnFirstSignIn != nil || o.DefaultRole != "") {
+		return o, errors.New("app.Options.SignIn replaces the sign-in gate, so it cannot be combined with OnFirstSignIn or DefaultRole")
+	}
+	if o.PolicyWriteTimeout < 0 {
+		return o, errors.New("app.Options.PolicyWriteTimeout may not be negative")
 	}
 	if o.DefaultRole == db.AdminRole {
 		return o, fmt.Errorf("app.Options.DefaultRole may not be %q: every new account would be an administrator", db.AdminRole)
@@ -279,10 +341,11 @@ func openAPISpec(inst *installation) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	specPath := o.APIPrefix + server.OpenAPIPath
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, server.OpenAPIPath, nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, specPath, nil))
 	if rec.Code != http.StatusOK {
-		return nil, fmt.Errorf("GET %s = %d: %s", server.OpenAPIPath, rec.Code, rec.Body)
+		return nil, fmt.Errorf("GET %s = %d: %s", specPath, rec.Code, rec.Body)
 	}
 	var out bytes.Buffer
 	if err := json.Indent(&out, rec.Body.Bytes(), "", "  "); err != nil {
@@ -331,6 +394,10 @@ func health(context.Context, *struct{}) (*HealthOutput, error) {
 // Routes function receives the same value, so it can use the session
 // store, the authorizer and the logger.
 type Deps struct {
+	// Enforcer is the Casbin enforcer behind Authorizer, for app code that
+	// writes bindings. Hold db.LockOf(Enforcer) for a write. Nil without a
+	// database, and always under the openapi command.
+	Enforcer *casbin.Enforcer
 	// Sessions holds signed-in sessions; without it only /health is served.
 	Sessions server.SessionStore
 	// Authorizer decides role permissions (Casbin over Postgres).
@@ -358,6 +425,13 @@ type Deps struct {
 func newRouter(inst *installation, d Deps) (*server.Router, error) {
 	o := inst.o
 	router := server.NewRouter(o.Name, o.Version).WithResources(inst.newRouterResources())
+	if o.APIPrefix != "" {
+		router.WithOpenAPIPath(o.APIPrefix + server.OpenAPIPath)
+	}
+	if o.Guard != nil {
+		router.WithGuard(o.Guard(d))
+	}
+	router.WithMiddleware(o.Middleware...)
 	if err := registerBuiltins(router, o, d); err != nil {
 		return nil, err
 	}
@@ -389,15 +463,17 @@ func registerBuiltins(router *server.Router, o Options, d Deps) error {
 		return nil
 	}
 	router.WithAuth(d.Sessions, d.Authorizer, o.names().SessionCookie)
-	if err := server.Register(router, server.Operation{
-		OperationID: "get-me",
-		Method:      http.MethodGet,
-		Path:        "/me",
-		Summary:     "Return the signed-in user",
-		Tags:        []string{"auth"},
-		Permission:  server.Authenticated,
-	}, server.NewMe(d.Roles, d.Log)); err != nil {
-		return err
+	if !slices.Contains(o.SkipBuiltins, skipMe) {
+		if err := server.Register(router, server.Operation{
+			OperationID: "get-me",
+			Method:      http.MethodGet,
+			Path:        o.APIPrefix + "/me",
+			Summary:     "Return the signed-in user",
+			Tags:        []string{"auth"},
+			Permission:  server.Authenticated,
+		}, server.NewMe(d.Roles, d.Log)); err != nil {
+			return err
+		}
 	}
 	if d.Auth == nil {
 		return nil
@@ -425,7 +501,7 @@ func registerBuiltins(router *server.Router, o Options, d Deps) error {
 	return server.Register(router, server.Operation{
 		OperationID: "auth-logout",
 		Method:      http.MethodPost,
-		Path:        server.LogoutPath,
+		Path:        o.APIPrefix + server.LogoutPath,
 		Summary:     "End the session",
 		Tags:        []string{"auth"},
 		Permission:  server.Public,
@@ -494,7 +570,7 @@ func serveWith(ctx context.Context, inst *installation, log *zap.Logger, d Deps,
 				}
 			}
 		}()
-		workerErr = run(ctx, RunDeps{Pool: d.Pool, Authorizer: d.Authorizer, Log: log})
+		workerErr = run(ctx, RunDeps{Pool: d.Pool, Enforcer: d.Enforcer, Authorizer: d.Authorizer, Log: log})
 	}()
 
 	listenErr := listen(ctx, router)
@@ -564,10 +640,11 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 		}
 		closers = append(closers, pool.Close)
 		d.Pool = pool
-		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub, inst.roles)
+		e, err := db.NewEnforcer(ctx, pool, cfg.AdminSub, inst.roles, db.WithPolicyWriteTimeout(o.PolicyWriteTimeout))
 		if err != nil {
 			return d, cleanup, err
 		}
+		d.Enforcer = e
 		authz := server.CasbinAuthorizer{Enforcer: e}
 		d.Authorizer = authz
 		d.Roles = authz
@@ -593,6 +670,9 @@ func connect(ctx context.Context, inst *installation, cfg config.Config, log *za
 	d.Auth = server.NewAuth(google, sessions, attempts, bindings, log, cfg.GoogleClientSecret, o.names())
 	if o.OnFirstSignIn != nil || o.DefaultRole != "" {
 		d.Auth = d.Auth.WithFirstSignIn(o.OnFirstSignIn, o.DefaultRole, binder)
+	}
+	if o.SignIn != nil || o.OnSignedIn != nil {
+		d.Auth = d.Auth.WithSignIn(o.SignIn, o.OnSignedIn)
 	}
 	return d, cleanup, nil
 }

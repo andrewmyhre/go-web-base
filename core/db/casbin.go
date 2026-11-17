@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/casbin/casbin/v2/model"
 	"github.com/casbin/casbin/v2/persist"
@@ -23,6 +24,36 @@ import (
 type CasbinAdapter struct {
 	db       sqlc.DBTX
 	filtered bool // true if the most recent load was a filtered one
+	// writeTimeout bounds every write (add, remove, save). Zero means no
+	// bound, which is the adapter's original behaviour.
+	writeTimeout time.Duration
+}
+
+// An EnforcerOption tunes the adapter NewEnforcer builds.
+type EnforcerOption func(*CasbinAdapter)
+
+// WithPolicyWriteTimeout bounds every adapter write to d, so a hung
+// database cannot stall a request that holds the enforcer's lock while it
+// writes. Loads are not bounded. Zero or negative keeps the default of no
+// bound.
+func WithPolicyWriteTimeout(d time.Duration) EnforcerOption {
+	return func(a *CasbinAdapter) { a.WithWriteTimeout(d) }
+}
+
+// WithWriteTimeout is WithPolicyWriteTimeout for an adapter built directly.
+// It returns a so it chains after NewCasbinAdapter.
+func (a *CasbinAdapter) WithWriteTimeout(d time.Duration) *CasbinAdapter {
+	a.writeTimeout = d
+	return a
+}
+
+// writeContext is the context of one write: Background, or one that expires
+// after the write timeout. The caller must call cancel.
+func (a *CasbinAdapter) writeContext() (context.Context, context.CancelFunc) {
+	if a.writeTimeout <= 0 {
+		return context.Background(), func() {}
+	}
+	return context.WithTimeout(context.Background(), a.writeTimeout)
 }
 
 // NewCasbinAdapter returns a CasbinAdapter reading and writing through
@@ -164,8 +195,10 @@ func applyRows(rows []sqlc.LoadCasbinRulesRow, m model.Model) error {
 // SavePolicy replaces every stored rule with the rules of m, in one
 // transaction. It implements casbin's persist.Adapter.
 func (a *CasbinAdapter) SavePolicy(m model.Model) error {
-	if err := a.querierWithTx(context.Background(), func(q sqlc.Querier) error {
-		if err := q.DeleteAllCasbinRules(context.Background()); err != nil {
+	ctx, cancel := a.writeContext()
+	defer cancel()
+	if err := a.querierWithTx(ctx, func(q sqlc.Querier) error {
+		if err := q.DeleteAllCasbinRules(ctx); err != nil {
 			return fmt.Errorf("delete all casbin rules: %w", err)
 		}
 		// Every ptype of both sections, not only p and g: a model with
@@ -173,7 +206,7 @@ func (a *CasbinAdapter) SavePolicy(m model.Model) error {
 		for _, sec := range []string{"p", "g"} {
 			for ptype, assertion := range m[sec] {
 				for _, rule := range assertion.Policy {
-					if err := a.insertRule(q, ptype, rule); err != nil {
+					if err := a.insertRule(ctx, q, ptype, rule); err != nil {
 						return err
 					}
 				}
@@ -205,9 +238,11 @@ func (a *CasbinAdapter) AddPolicies(sec string, ptype string, rules [][]string) 
 }
 
 func (a *CasbinAdapter) insertRules(ptype string, rules [][]string) error {
-	if err := a.querierWithTx(context.Background(), func(q sqlc.Querier) error {
+	ctx, cancel := a.writeContext()
+	defer cancel()
+	if err := a.querierWithTx(ctx, func(q sqlc.Querier) error {
 		for _, rule := range rules {
-			if err := a.insertRule(q, ptype, rule); err != nil {
+			if err := a.insertRule(ctx, q, ptype, rule); err != nil {
 				return err
 			}
 		}
@@ -218,12 +253,12 @@ func (a *CasbinAdapter) insertRules(ptype string, rules [][]string) error {
 	return nil
 }
 
-func (a *CasbinAdapter) insertRule(q sqlc.Querier, ptype string, rule []string) error {
+func (a *CasbinAdapter) insertRule(ctx context.Context, q sqlc.Querier, ptype string, rule []string) error {
 	values, err := valuesFromRule(rule)
 	if err != nil {
 		return err
 	}
-	if err := q.InsertCasbinRule(context.Background(), sqlc.InsertCasbinRuleParams{
+	if err := q.InsertCasbinRule(ctx, sqlc.InsertCasbinRuleParams{
 		Ptype: ptype,
 		V0:    values[0], V1: values[1], V2: values[2],
 		V3: values[3], V4: values[4], V5: values[5],
@@ -264,7 +299,8 @@ func (a *CasbinAdapter) RemovePolicy(sec string, ptype string, rule []string) er
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
+	ctx, cancel := a.writeContext()
+	defer cancel()
 	if err := sqlc.New(a.db).DeleteCasbinRule(ctx, params); err != nil {
 		return fmt.Errorf("remove casbin rule %q %v: %w", ptype, rule, err)
 	}
@@ -277,13 +313,15 @@ func (a *CasbinAdapter) RemovePolicies(sec string, ptype string, rules [][]strin
 	if err := checkSection(sec); err != nil {
 		return err
 	}
-	return a.querierWithTx(context.Background(), func(q sqlc.Querier) error {
+	ctx, cancel := a.writeContext()
+	defer cancel()
+	return a.querierWithTx(ctx, func(q sqlc.Querier) error {
 		for _, rule := range rules {
 			params, err := removeValues(ptype, rule)
 			if err != nil {
 				return err
 			}
-			if err := q.DeleteCasbinRule(context.Background(), params); err != nil {
+			if err := q.DeleteCasbinRule(ctx, params); err != nil {
 				return fmt.Errorf("remove casbin rule %q %v: %w", ptype, rule, err)
 			}
 		}
@@ -313,7 +351,8 @@ func (a *CasbinAdapter) RemoveFilteredPolicy(sec string, ptype string, fieldInde
 		}
 		fields[fieldIndex+i] = pgtype.Text{String: v, Valid: true}
 	}
-	ctx := context.Background()
+	ctx, cancel := a.writeContext()
+	defer cancel()
 	err := sqlc.New(a.db).DeleteCasbinRulesFiltered(ctx, sqlc.DeleteCasbinRulesFilteredParams{
 		Ptype: ptype,
 		F0:    fields[0], F1: fields[1], F2: fields[2],

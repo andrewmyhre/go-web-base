@@ -22,9 +22,37 @@ import (
 type Permission struct {
 	Resource Resource
 	Verb     Verb
+	// Scope says where the permission applies. The zero value, ScopeGlobal,
+	// is what every permission was before scopes existed. Core's own check
+	// ignores it; only an app's Guard reads it, and Build refuses a scoped
+	// permission when the router has no Guard.
+	Scope ScopeKind
 
 	public        bool
 	authenticated bool
+}
+
+// ScopeKind is where a permission applies.
+type ScopeKind int
+
+const (
+	// ScopeGlobal is the default: the permission is checked in the global
+	// domain.
+	ScopeGlobal ScopeKind = iota
+	// ScopeProject marks a permission checked in a project.
+	ScopeProject
+	// ScopeOrganization marks a permission checked in an organization.
+	ScopeOrganization
+)
+
+// IsScoped reports whether p is checked outside the global domain, which
+// only an app's Guard can do.
+func (p Permission) IsScoped() bool { return p.Scope != ScopeGlobal }
+
+// In returns p with the scope s.
+func (p Permission) In(s ScopeKind) Permission {
+	p.Scope = s
+	return p
 }
 
 // Public declares that a route needs no role, for example GET /health. It
@@ -85,7 +113,7 @@ func (p Permission) Validate() error {
 		return fmt.Errorf("%w: a permission cannot be both Public and Authenticated", ErrUnknownResource)
 	}
 	if p.public || p.authenticated {
-		if p.Resource != "" || p.Verb != "" {
+		if p.Resource != "" || p.Verb != "" || p.Scope != ScopeGlobal {
 			return fmt.Errorf("%w: %s carries a resource or verb (%q, %q)", ErrUnknownResource, p, p.Resource, p.Verb)
 		}
 		return nil

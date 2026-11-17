@@ -60,6 +60,13 @@ func main() {
 | `DefaultRole` | no | The role a subject with no binding is given, globally, the first time it signs in. Must be a role in `Roles`, and not `Admin`. Unset keeps the refuse-by-default. See "First sign-in". |
 | `OnFirstSignIn` | no | `func(ctx, server.Identity) (role string, err error)`, run when a subject with no binding signs in, to create the app's own account. See "First sign-in". |
 | `Run` | no | `func(ctx, app.RunDeps) error`, the app's background work (a queue consumer, a scheduler). Started under `serve` once the database, Redis and migrations are ready and before the listener; never under `openapi`. See "Background work". |
+| `Guard` | no | `func(d app.Deps) server.Guard`, the app's per-route authorization check. Replaces core's check on every route when set. See "Taking over authorization". |
+| `Middleware` | no | `[]func(http.Handler) http.Handler`, run on every request after the access log, recovery and the session middleware, before the route's check. Bearer-token authentication goes here. |
+| `SignIn`, `OnSignedIn` | no | `SignIn` replaces core's sign-in gate (binding check, `OnFirstSignIn`, `DefaultRole`, which it may not be combined with); `OnSignedIn` runs for an admitted subject before the session is minted. See "Taking over sign-in". |
+| `APIPrefix` | no | `"/api/v1"`: put in front of `/me`, `/auth/logout` and `/openapi.json`. `/auth/google`, its callback and `/health` stay at the root. |
+| `SkipBuiltins` | no | `[]string{"me"}`: built-in routes core does not register because the app registers its own. |
+| `Settings` | no | `func(*app.Installer) error`, declares the app's own settings with no feature prefix (`String("runtime_driver", ...)` is `<PREFIX>_RUNTIME_DRIVER` and `--runtime-driver`). |
+| `PolicyWriteTimeout` | no | Bounds every Casbin adapter write. Zero keeps no bound. |
 | `Migrations` | no | The app's own goose migrations, an `fs.FS` with `*.sql` at its root. Run last, in `goose_app_version`. |
 | `Features` | no | Optional modules, `[]app.Feature`, installed in order. See below. |
 | `Routes` | no | The app's own routes, registered after the built-ins and the features' routes. It gets `app.Deps` (session store, authorizer, role reader, auth, logger, and `Pool`, the Postgres pool, nil without a database and under `openapi`). Every route must go through `server.Register` or `server.RegisterHandler` with a permission, or `Build` refuses it. |
@@ -145,6 +152,53 @@ app.Options{
 - Bindings are read from memory per process, as before: a replica that did not
   bind the subject learns of the binding only at its next start or when the
   subject signs in there. Run one API replica, or accept that.
+
+### Taking over authorization
+
+All of these are optional and additive: an app that sets none of them gets
+the behaviour of `v0.4.0` byte for byte (`core/app/golden_test.go` pins it).
+
+- **`Guard`** (`server.Guard`, `Check(ctx, GuardRequest) GuardResult`). When
+  set it decides every route, built-ins and feature routes included, so it
+  must handle `Public`, `Authenticated` and global permissions as core's own
+  check does. `GuardRequest` carries the `Permission`, `Method`, `Path` (the
+  matched pattern as registered), `Param`, `Header`, `Query`, and
+  `SessionLookupFailed`, which is true when the session store failed: answer
+  503 for it, or an outage reads as signed out. `GuardResult.Status` 0 lets
+  the request through; `Ctx` replaces the request context for the handler;
+  `Params` rewrites path parameters (a slug into its canonical id) before the
+  handler, for Huma operations and plain chi routes alike, and only when the
+  request is let through. A route with a Guard no longer needs an authorizer
+  or a session store to build: the decision, and failing closed, are the
+  Guard's. The function runs when the router is built, and also for
+  `openapi`, with stand-in `Deps`.
+- **Scopes.** `server.Permission` has a `Scope` (`ScopeGlobal` by default,
+  `ScopeProject`, `ScopeOrganization`; `p.In(scope)`). Core's own check ignores
+  it, and `Build` refuses a scoped permission when there is no Guard
+  (`server.ErrScopedWithoutGuard`), so a scoped route can never be decided
+  globally by accident. The scope does not appear in `Permission.String()` or
+  the access log.
+- **`Middleware`** is the place for bearer tokens. It runs after the session
+  middleware, so the Guard sees both and can prefer the token.
+- **`Deps.Enforcer` and `RunDeps.Enforcer`** are the Casbin enforcer behind
+  `Authorizer`. App code that writes bindings must hold
+  `db.LockOf(enforcer).Lock()` for the write, the lock core's own reads take.
+- **`PolicyWriteTimeout`** bounds each adapter write, so a hung database
+  cannot stall requests while the enforcer is locked. `db.NewEnforcer` takes
+  `db.WithPolicyWriteTimeout(d)`.
+
+### Taking over sign-in
+
+`SignIn func(ctx, server.Identity) error` replaces core's gate: nil admits,
+`server.ErrSignInRefused` is 403 (even wrapped), any other error is 503. The
+subject need not hold a role binding. Core keeps the parts that are not
+policy: the state cookie, PKCE, the nonce, ending the previous session, the
+rbac log line (allow or deny, from the hook's result) and the session itself.
+`OnSignedIn func(ctx, server.Identity)` runs after the gate admits and before
+the session is minted, so an app records its users directory only for
+subjects who got in. It cannot refuse; it logs its own errors. Both may run
+more than once for one subject, so they must be idempotent. `SignIn` cannot
+be combined with `OnFirstSignIn` or `DefaultRole`.
 
 ### Background work
 

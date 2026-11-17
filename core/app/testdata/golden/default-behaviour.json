@@ -1,0 +1,630 @@
+{
+  "routes": [
+    "GET | /openapi.json |  | public",
+    "GET | /health | get-health | public",
+    "GET | /me | get-me | authenticated",
+    "GET | /auth/google | auth-google-start | public",
+    "GET | /auth/google/callback | auth-google-callback | public",
+    "POST | /auth/logout | auth-logout | public",
+    "GET | /widgets | list-widgets | Widgets: Read",
+    "GET | /projects | list-projects | Projects: Read",
+    "POST | /projects | create-project | Projects: Create",
+    "DELETE | /projects/{id} | delete-project | Projects: Delete",
+    "GET | /account | get-account | authenticated",
+    "GET | /page | plain-page | authenticated"
+  ],
+  "responses": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"status\":\"ok\"}\n"
+    },
+    {
+      "method": "POST",
+      "path": "/health",
+      "status": 405
+    },
+    {
+      "method": "GET",
+      "path": "/nope",
+      "status": 404,
+      "content_type": "text/plain; charset=utf-8",
+      "body": "404 page not found\n"
+    },
+    {
+      "method": "GET",
+      "path": "/me",
+      "status": 401,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"not signed in\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/me",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"id\":\"100000000000000000001\",\"name\":\"Golden User\",\"email\":\"golden@example.com\",\"avatar\":\"https://example.com/a.png\",\"roles\":[{\"role\":\"Contributor\",\"domain\":\"global\"}]}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/me",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000b2",
+      "status": 503,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Service Unavailable\",\"status\":503,\"detail\":\"the session store is unavailable; try again\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/me",
+      "cookie": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "status": 401,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"not signed in\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "status": 200,
+      "content_type": "application/openapi+json",
+      "body": "{\"components\":{\"schemas\":{\"ErrorDetail\":{\"additionalProperties\":false,\"properties\":{\"location\":{\"description\":\"Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'\",\"type\":\"string\"},\"message\":{\"description\":\"Error message text\",\"type\":\"string\"},\"value\":{\"description\":\"The value at the given location\"}},\"type\":\"object\"},\"ErrorModel\":{\"additionalProperties\":false,\"properties\":{\"detail\":{\"description\":\"A human-readable explanation specific to this occurrence of the problem.\",\"examples\":[\"Property foo is required but is missing.\"],\"type\":\"string\"},\"errors\":{\"description\":\"Optional list of individual error details\",\"items\":{\"$ref\":\"#/components/schemas/ErrorDetail\"},\"type\":[\"array\",\"null\"]},\"instance\":{\"description\":\"A URI reference that identifies the specific occurrence of the problem.\",\"examples\":[\"https://example.com/error-log/abc123\"],\"format\":\"uri\",\"type\":\"string\"},\"status\":{\"description\":\"HTTP status code\",\"examples\":[400],\"format\":\"int64\",\"type\":\"integer\"},\"title\":{\"description\":\"A short, human-readable summary of the problem type. This value should not change between occurrences of the error.\",\"examples\":[\"Bad Request\"],\"type\":\"string\"},\"type\":{\"default\":\"about:blank\",\"description\":\"A URI reference to human-readable documentation for the error.\",\"examples\":[\"https://example.com/errors/example\"],\"format\":\"uri\",\"type\":\"string\"}},\"type\":\"object\"},\"HealthOutputBody\":{\"additionalProperties\":false,\"properties\":{\"status\":{\"description\":\"Always ok while the server is serving.\",\"examples\":[\"ok\"],\"type\":\"string\"}},\"required\":[\"status\"],\"type\":\"object\"},\"MeOutputBody\":{\"additionalProperties\":false,\"properties\":{\"avatar\":{\"description\":\"Avatar URL.\",\"type\":\"string\"},\"email\":{\"description\":\"Email, shown only and never matched on. Empty unless Google says it is verified.\",\"type\":\"string\"},\"id\":{\"description\":\"Google account ID (the OIDC sub). This is the identity.\",\"type\":\"string\"},\"name\":{\"description\":\"Display name.\",\"type\":\"string\"},\"roles\":{\"description\":\"Every role the user is bound to, in every domain, read from the role bindings. Sorted by domain, then role.\",\"items\":{\"$ref\":\"#/components/schemas/MeRole\"},\"type\":\"array\"}},\"required\":[\"id\",\"name\",\"email\",\"avatar\",\"roles\"],\"type\":\"object\"},\"MeRole\":{\"additionalProperties\":false,\"properties\":{\"domain\":{\"description\":\"Where the binding applies: global, or a project ID.\",\"type\":\"string\"},\"role\":{\"description\":\"Role name, for example Admin.\",\"type\":\"string\"}},\"required\":[\"role\",\"domain\"],\"type\":\"object\"}}},\"info\":{\"title\":\"goldenapp\",\"version\":\"9.9.9\"},\"openapi\":\"3.1.0\",\"paths\":{\"/account\":{\"get\":{\"operationId\":\"get-account\",\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"account\"}},\"/auth/logout\":{\"post\":{\"operationId\":\"auth-logout\",\"responses\":{\"204\":{\"description\":\"No Content\",\"headers\":{\"Set-Cookie\":{\"schema\":{\"description\":\"Clears the session cookie.\",\"type\":\"string\"}}}},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"End the session\",\"tags\":[\"auth\"]}},\"/health\":{\"get\":{\"operationId\":\"get-health\",\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"Report that the server is serving\",\"tags\":[\"server\"]}},\"/me\":{\"get\":{\"operationId\":\"get-me\",\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/MeOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"Return the signed-in user\",\"tags\":[\"auth\"]}},\"/projects\":{\"get\":{\"operationId\":\"list-projects\",\"parameters\":[{\"in\":\"path\",\"name\":\"id\",\"required\":true,\"schema\":{\"type\":\"string\"}}],\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"list-projects\"},\"post\":{\"operationId\":\"create-project\",\"parameters\":[{\"in\":\"path\",\"name\":\"id\",\"required\":true,\"schema\":{\"type\":\"string\"}}],\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"create-project\"}},\"/projects/{id}\":{\"delete\":{\"operationId\":\"delete-project\",\"parameters\":[{\"in\":\"path\",\"name\":\"id\",\"required\":true,\"schema\":{\"type\":\"string\"}}],\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"delete-project\"}},\"/widgets\":{\"get\":{\"operationId\":\"list-widgets\",\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/HealthOutputBody\"}}},\"description\":\"OK\"},\"default\":{\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/ErrorModel\"}}},\"description\":\"Error\"}},\"summary\":\"List widgets\",\"tags\":[\"widgets\"]}}}}"
+    },
+    {
+      "method": "GET",
+      "path": "/projects",
+      "status": 401,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"not signed in\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/projects",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 422,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unprocessable Entity\",\"status\":422,\"detail\":\"validation failed\",\"errors\":[{\"message\":\"required path parameter is missing\",\"location\":\"path.id\",\"value\":\"\"}]}\n"
+    },
+    {
+      "method": "POST",
+      "path": "/projects",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 422,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unprocessable Entity\",\"status\":422,\"detail\":\"validation failed\",\"errors\":[{\"message\":\"required path parameter is missing\",\"location\":\"path.id\",\"value\":\"\"}]}\n"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/7",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 403,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Forbidden\",\"status\":403,\"detail\":\"you do not have Projects: Delete\"}\n"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/7",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000b2",
+      "status": 503,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Service Unavailable\",\"status\":503,\"detail\":\"the session store is unavailable; try again\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/widgets",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 403,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Forbidden\",\"status\":403,\"detail\":\"you do not have Widgets: Read\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/account",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"status\":\"widgets\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/account",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000b2",
+      "status": 503,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Service Unavailable\",\"status\":503,\"detail\":\"the session store is unavailable; try again\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/page",
+      "status": 401,
+      "content_type": "application/problem+json",
+      "body": "{\"title\":\"Unauthorized\",\"status\":401,\"detail\":\"not signed in\"}\n"
+    },
+    {
+      "method": "GET",
+      "path": "/page",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 200,
+      "body": "page"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/google",
+      "status": 302,
+      "content_type": "text/html; charset=utf-8",
+      "headers": {
+        "Cache-Control": "no-store",
+        "Location": "https://accounts.google.com/o/oauth2/v2/auth",
+        "Set-Cookie": "goldenapp_oauth_state=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; Path=/auth/google; Max-Age=600; HttpOnly; Secure; SameSite=Lax"
+      },
+      "body": "\u003credirect body carries a random nonce and challenge\u003e"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/google/callback",
+      "status": 400,
+      "content_type": "application/problem+json",
+      "headers": {
+        "Cache-Control": "no-store",
+        "Set-Cookie": "goldenapp_oauth_state=; Path=/auth/google; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+      },
+      "body": "{\"title\":\"Bad Request\",\"status\":400,\"detail\":\"sign-in failed; start again at /auth/google\"}\n"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/logout",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 204,
+      "headers": {
+        "Set-Cookie": "goldenapp_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/auth/logout",
+      "status": 204,
+      "headers": {
+        "Set-Cookie": "goldenapp_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "cookie": "00000000000000000000000000000000000000000000000000000000000000a1",
+      "status": 404,
+      "content_type": "text/plain; charset=utf-8",
+      "body": "404 page not found\n"
+    }
+  ],
+  "log_lines": [
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/health",
+      "permission": "public",
+      "route": "/health",
+      "scope": "api",
+      "status": 200,
+      "user_sub": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "POST",
+      "msg": "request",
+      "path": "/health",
+      "permission": "",
+      "route": "",
+      "scope": "api",
+      "status": 405,
+      "user_sub": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/nope",
+      "permission": "",
+      "route": "",
+      "scope": "api",
+      "status": 404,
+      "user_sub": ""
+    },
+    {
+      "action": "",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/me",
+      "permission": "authenticated",
+      "route": "/me",
+      "scope": "api",
+      "status": 401,
+      "user_sub": ""
+    },
+    {
+      "action": "",
+      "decision": "allow",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/me",
+      "permission": "authenticated",
+      "route": "/me",
+      "scope": "api",
+      "status": 200,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "error": "store is down",
+      "level": "error",
+      "msg": "resolve session"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/me",
+      "permission": "authenticated",
+      "route": "/me",
+      "scope": "api",
+      "status": 503,
+      "user_sub": ""
+    },
+    {
+      "action": "",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/me",
+      "permission": "authenticated",
+      "route": "/me",
+      "scope": "api",
+      "status": 401,
+      "user_sub": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/openapi.json",
+      "permission": "public",
+      "route": "/openapi.json",
+      "scope": "api",
+      "status": 200,
+      "user_sub": ""
+    },
+    {
+      "action": "Read",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "Projects",
+      "scope": "rbac",
+      "subject": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/projects",
+      "permission": "Projects: Read",
+      "route": "/projects",
+      "scope": "api",
+      "status": 401,
+      "user_sub": ""
+    },
+    {
+      "action": "Read",
+      "decision": "allow",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "Projects",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/projects",
+      "permission": "Projects: Read",
+      "route": "/projects",
+      "scope": "api",
+      "status": 422,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "action": "Create",
+      "decision": "allow",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "Projects",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "POST",
+      "msg": "request",
+      "path": "/projects",
+      "permission": "Projects: Create",
+      "route": "/projects",
+      "scope": "api",
+      "status": 422,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "action": "Delete",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "Projects",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "DELETE",
+      "msg": "request",
+      "path": "/projects/7",
+      "permission": "Projects: Delete",
+      "route": "/projects/{id}",
+      "scope": "api",
+      "status": 403,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "error": "store is down",
+      "level": "error",
+      "msg": "resolve session"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "DELETE",
+      "msg": "request",
+      "path": "/projects/7",
+      "permission": "Projects: Delete",
+      "route": "/projects/{id}",
+      "scope": "api",
+      "status": 503,
+      "user_sub": ""
+    },
+    {
+      "action": "Read",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "Widgets",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/widgets",
+      "permission": "Widgets: Read",
+      "route": "/widgets",
+      "scope": "api",
+      "status": 403,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "action": "",
+      "decision": "allow",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/account",
+      "permission": "authenticated",
+      "route": "/account",
+      "scope": "api",
+      "status": 200,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "error": "store is down",
+      "level": "error",
+      "msg": "resolve session"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/account",
+      "permission": "authenticated",
+      "route": "/account",
+      "scope": "api",
+      "status": 503,
+      "user_sub": ""
+    },
+    {
+      "action": "",
+      "decision": "deny",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/page",
+      "permission": "authenticated",
+      "route": "/page",
+      "scope": "api",
+      "status": 401,
+      "user_sub": ""
+    },
+    {
+      "action": "",
+      "decision": "allow",
+      "domain": "global",
+      "level": "info",
+      "msg": "rbac decision",
+      "object": "authenticated",
+      "scope": "rbac",
+      "subject": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/page",
+      "permission": "authenticated",
+      "route": "/page",
+      "scope": "api",
+      "status": 200,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/auth/google",
+      "permission": "public",
+      "route": "/auth/google",
+      "scope": "api",
+      "status": 302,
+      "user_sub": ""
+    },
+    {
+      "level": "warn",
+      "msg": "sign-in failed",
+      "reason": "state does not match this browser's sign-in"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/auth/google/callback",
+      "permission": "public",
+      "route": "/auth/google/callback",
+      "scope": "api",
+      "status": 400,
+      "user_sub": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "POST",
+      "msg": "request",
+      "path": "/auth/logout",
+      "permission": "public",
+      "route": "/auth/logout",
+      "scope": "api",
+      "status": 204,
+      "user_sub": "100000000000000000001"
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "POST",
+      "msg": "request",
+      "path": "/auth/logout",
+      "permission": "public",
+      "route": "/auth/logout",
+      "scope": "api",
+      "status": 204,
+      "user_sub": ""
+    },
+    {
+      "client_ip": "192.0.2.1",
+      "level": "info",
+      "method": "GET",
+      "msg": "request",
+      "path": "/api/v1/me",
+      "permission": "",
+      "route": "",
+      "scope": "api",
+      "status": 404,
+      "user_sub": ""
+    }
+  ],
+  "settings": {
+    "addr": ":8080",
+    "admin_sub": "",
+    "database_dsn": "",
+    "google_client_id": "",
+    "google_client_secret": "",
+    "google_redirect_uri": "",
+    "log_level": "info",
+    "redis_addr": "",
+    "redis_password": "",
+    "widgets_color": "red"
+  },
+  "serve_flags": [
+    "addr=:8080 | address the HTTP server listens on (env GOLDENAPP_ADDR)",
+    "admin-sub= | OIDC sub (not email) of the user to bootstrap as the global Admin; empty to skip (env GOLDENAPP_ADMIN_SUB)",
+    "database-dsn= | Postgres connection string; empty to run without a database (env GOLDENAPP_DATABASE_DSN)",
+    "google-client-id= | Google OAuth client ID; empty to disable sign-in (env GOLDENAPP_GOOGLE_CLIENT_ID)",
+    "google-redirect-uri= | absolute Google OAuth callback URI registered with the client (env GOLDENAPP_GOOGLE_REDIRECT_URI)",
+    "log-level=info | log level: debug, info, warn or error (env GOLDENAPP_LOG_LEVEL)",
+    "redis-addr= | Redis server address (env GOLDENAPP_REDIS_ADDR)",
+    "widgets-color=red | widget color (env GOLDENAPP_WIDGETS_COLOR)"
+  ]
+}
