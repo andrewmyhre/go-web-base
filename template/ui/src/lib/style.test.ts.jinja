@@ -1,0 +1,33 @@
+import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+
+// Vitest runs from ui/. The style is the Copier answer `style`; see docs/styles.md
+// in go-web-base for the list and for how to change it.
+const layout = readFileSync('src/routes/+layout.svelte', 'utf8');
+const STYLE = '[[ style ]]';
+const imports = [...layout.matchAll(/import '@andrewmyhre\/web-base-ui\/styles\/([a-z0-9-]+)\.css';/g)].map((m) => m[1]);
+
+describe('the chosen style', () => {
+[[% if style == 'default' %]]
+	it('is the default: the layout imports no style stylesheet', () => {
+		expect(STYLE).toBe('default');
+		expect(imports).toEqual([]);
+	});
+[[% else %]]
+	it('is imported once by the layout, after app.css', () => {
+		expect(imports).toEqual([STYLE]);
+		expect(layout.indexOf("'../app.css'")).toBeGreaterThan(-1);
+		expect(layout.indexOf("'../app.css'")).toBeLessThan(layout.indexOf('web-base-ui/styles/'));
+	});
+
+	it('is a stylesheet the installed package ships, with this style\'s fonts and tokens', () => {
+		const file = 'node_modules/@andrewmyhre/web-base-ui/dist/styles/css/' + STYLE + '.css';
+		expect(existsSync(file)).toBe(true);
+		const css = readFileSync(file, 'utf8');
+		expect(css).toMatch(/^\/\* /);
+		expect(css).toContain('@import url(\'https://fonts.googleapis.com/css2?');
+		expect(css).toMatch(/--wb-bg: /);
+		expect(css).toMatch(/--wb-accent: /);
+	});
+[[% endif %]]
+});

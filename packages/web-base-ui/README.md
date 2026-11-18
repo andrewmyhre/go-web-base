@@ -102,6 +102,18 @@ deliberate: the look belongs to the project, and an unstyled component is
 still usable. If the class names change in a release the release notes say
 so.
 
+### Styles
+
+The package also ships twenty ready-made styles (`@andrewmyhre/web-base-ui/styles/<slug>.css`),
+each a stylesheet of `--wb-*` tokens (light and dark), two Google Fonts and
+rules that paint every component above, form controls and tables included. A
+project uses at most one, imported in `+layout.svelte` after `app.css`; the
+template does it from its `style` Copier question and `default` imports none.
+`@andrewmyhre/web-base-ui/styles` exports the list (`styles`, `findStyle`) for
+tooling. The names, the tokens and how to change style are in
+[docs/styles.md](../../docs/styles.md). The files in `src/lib/styles/css/` are
+generated: edit `src/lib/styles/data/<slug>.ts` and run `pnpm run generate:styles`.
+
 ## Developing
 
 ```sh
@@ -109,6 +121,7 @@ pnpm install
 pnpm build      # svelte-package: src/lib -> dist/
 pnpm test       # vitest, happy-dom
 pnpm check      # svelte-check, warnings fail
+pnpm run generate:styles   # rewrite src/lib/styles/css/*.css from src/lib/styles/data/
 ```
 
 Tests mock `$app/state`; `test/app-state.ts` stands in for it.

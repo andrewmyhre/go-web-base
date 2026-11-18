@@ -16,6 +16,7 @@
   "scripts": {
     "build": "svelte-package --input src/lib --output dist",
     "test": "vitest run",
+    "generate:styles": "UPDATE_STYLE_CSS=1 vitest run src/lib/styles/styles.test.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "prepack": "pnpm run build"
   },
@@ -37,6 +38,11 @@
       "types": "./dist/api/index.d.ts",
       "default": "./dist/api/index.js"
     },
+    "./styles": {
+      "types": "./dist/styles/index.d.ts",
+      "default": "./dist/styles/index.js"
+    },
+    "./styles/*.css": "./dist/styles/css/*.css",
     "./sw-policy": {
       "types": "./dist/sw-policy.d.ts",
       "default": "./dist/sw-policy.js"

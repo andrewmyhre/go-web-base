@@ -32,6 +32,7 @@ owns, docs, deploy manifests, CI and the UI. See [core/README.md](core/README.md
   avatar, side menu, API helpers, service worker policy) come from the
   `@andrewmyhre/web-base-ui` package in `packages/web-base-ui/`, pinned by
   URL in `ui/package.json`. See [packages/web-base-ui/README.md](packages/web-base-ui/README.md).
+- Twenty optional UI styles (a Copier question; the default is the plain look), each restyling every component of the UI package in light and dark. See [docs/styles.md](docs/styles.md).
 - Postgres via pgx, sqlc and goose. Redis via go-redis.
 - zap logging with scopes `api`, `rbac`, `queue` and `agent`, for Loki, with a
   Grafana dashboard in `deploy/grafana/`.
@@ -73,6 +74,7 @@ uvx copier@9.19.1 update
 | `registry` | `192.168.0.10:30500` | image names |
 | `admin_sub` | empty | the global Admin's Google sub |
 | `feature_example` | `false` | installs the `example` feature (see below) |
+| `style` | `default` | the UI's visual style: `default` (the plain look) or one of twenty named styles (see [docs/styles.md](docs/styles.md)); one stylesheet import in `ui/src/routes/+layout.svelte` |
 
 Each optional feature is a boolean question named `feature_<name>`, default
 `false`. Answering `true` renders only the glue the feature needs: its import
