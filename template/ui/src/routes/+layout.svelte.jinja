@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { SideMenu } from '@andrewmyhre/web-base-ui';
-	import '../app.css';
+	import '../app.css';[[% if style != 'default' %]]
+	import '@andrewmyhre/web-base-ui/styles/[[ style ]].css';[[% endif %]]
 
 	let { children }: { children: Snippet } = $props();
 </script>

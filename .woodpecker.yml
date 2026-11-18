@@ -50,10 +50,14 @@ steps:
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample-features \
           -d project_slug=sample-app -d github_repo=example/sample-app \
           -d feature_example=true
+        # A third render with a style chosen, to prove the question reaches the UI.
+        $${COPIER} copy --vcs-ref HEAD --defaults --trust . sample-style \
+          -d project_slug=sample-app -d github_repo=example/sample-app \
+          -d style=noir
         $${COPIER} copy --vcs-ref HEAD --defaults --trust . /tmp/control \
           -d project_slug=huddle-go -d project_name=Huddle -d go_module=huddle-go -d env_prefix=HUDDLE
         test "$(grep -rIil huddle /tmp/control | wc -l)" -gt 0
-        for d in sample sample-features; do
+        for d in sample sample-features sample-style; do
           if grep -rIil huddle $${d}; then
             echo "sweep: huddle survives in $${d}" >&2
             exit 1
@@ -76,6 +80,18 @@ steps:
         grep -q '/example/hello' sample-features/ui/openapi.json
         grep -q 'path: /example,' sample-features/deploy/dev/ingress.yaml
         grep -q "EXTRA_API_PREFIXES: string\[\] = \['/example'\]" sample-features/ui/src/service-worker.ts
+        # The style question: the default imports no stylesheet, a chosen style
+        # imports exactly its own, after app.css.
+        for d in sample sample-features; do
+          if grep -n 'web-base-ui/styles' $${d}/ui/src/routes/+layout.svelte; then
+            echo "sweep: a style import survives in $${d} with style=default" >&2
+            exit 1
+          fi
+        done
+        grep -qx "style: noir" sample-style/.copier-answers.yml
+        grep -qx "style: default" sample/.copier-answers.yml
+        test "$(grep -c "import '@andrewmyhre/web-base-ui/styles/noir.css';" sample-style/ui/src/routes/+layout.svelte)" = 1
+        test "$(grep -c 'web-base-ui/styles' sample-style/ui/src/routes/+layout.svelte)" = 1
         # Dependabot config ships, parses, and watches the Go modules.
         for d in sample sample-features; do
           uvx --with pyyaml python -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])); assert c["updates"][0]["package-ecosystem"] == "gomod"' $${d}/.github/dependabot.yml
@@ -217,6 +233,24 @@ steps:
         for d in release-sample release-sample-features; do
           (cd $${d}/ui && pnpm install --frozen-lockfile && pnpm run check:client && pnpm test && pnpm check && pnpm build)
         done
+
+  - name: ui-style
+    image: node:22.23.4-bookworm
+    depends_on: [render, ui-package]
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    commands:
+      - cd sample-style/ui
+      - corepack enable
+      - pnpm pkg set "dependencies.@andrewmyhre/web-base-ui=file:../../andrewmyhre-web-base-ui-0.0.0.tgz"
+      - pnpm install --no-frozen-lockfile
+      - pnpm run check:client
+      - pnpm test
+      - pnpm check
+      - pnpm build
+      # The chosen style's stylesheet is in the build.
+      - grep -r -q -e '--wb-accent' .svelte-kit/output/client
+      - grep -r -q 'fonts.googleapis.com' .svelte-kit/output/client
 
   - name: ui-features
     image: node:22.23.4-bookworm
