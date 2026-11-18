@@ -64,7 +64,10 @@ if gh release view "$UI_TAG" --repo "$REPO" >/dev/null 2>&1; then
   echo "release $UI_TAG already exists; skipping the UI build"
 else
   PACK=$(mktemp -d)
-  git archive HEAD packages/web-base-ui | tar -x -C "$PACK"
+  # The package's styles test reads docs/styles.md and copier.yml (it checks
+  # them against the style list), two levels above the package, so they go in
+  # the copy too. Do not drop that test to make the copy pass.
+  git archive HEAD packages/web-base-ui docs/styles.md copier.yml | tar -x -C "$PACK"
   ( cd "$PACK/packages/web-base-ui" \
     && pnpm install --frozen-lockfile \
     && pnpm pkg set "version=$NUM" \
