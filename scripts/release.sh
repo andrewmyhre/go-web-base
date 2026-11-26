@@ -66,8 +66,9 @@ else
   PACK=$(mktemp -d)
   # The package's styles test reads docs/styles.md and copier.yml (it checks
   # them against the style list), two levels above the package, so they go in
-  # the copy too. Do not drop that test to make the copy pass.
-  git archive HEAD packages/web-base-ui docs/styles.md copier.yml | tar -x -C "$PACK"
+  # the copy too; so does the root LICENSE, which license.test.ts compares with
+  # the package's copy. Do not drop a test to make the copy pass.
+  git archive HEAD packages/web-base-ui docs/styles.md copier.yml LICENSE | tar -x -C "$PACK"
   ( cd "$PACK/packages/web-base-ui" \
     && pnpm install --frozen-lockfile \
     && pnpm pkg set "version=$NUM" \
