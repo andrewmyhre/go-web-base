@@ -2,7 +2,7 @@
   "name": "@andrewmyhre/web-base-ui",
   "version": "0.0.0",
   "description": "Reusable UI for go-web-base projects: account menu, avatar, side menu, typed API client helpers and the service worker policy.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/andrewmyhre/go-web-base.git",

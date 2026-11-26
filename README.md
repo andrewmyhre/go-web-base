@@ -282,3 +282,12 @@ the template that adds feature support, and its `main.go` must pass
 graph. Copier renders `roles.go` and merges `main.go`; check the merge and run
 `go test ./...`. `TestRolesMatchDocs` now compares `docs/roles.md` with
 `roles.go`.
+
+## Licence
+
+go-web-base is licensed under the [Apache License 2.0](LICENSE), including the
+`core` Go module, the `features/example` module and the
+`@andrewmyhre/web-base-ui` package (`"license": "Apache-2.0"`). A project
+generated from the template does not inherit this licence: the template renders
+no `LICENSE` file and the generated `ui/package.json` is `private`, so the
+project's owner chooses its licence.
